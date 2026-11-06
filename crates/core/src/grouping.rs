@@ -2,7 +2,7 @@
 use crate::model::{FileEntry, Module};
 use std::collections::BTreeMap;
 
-const SPLIT_ABOVE: usize = 200;
+const SPLIT_ABOVE: usize = 60;
 const ROOT_NAME: &str = "(root)";
 
 pub fn provisional_modules(files: &[FileEntry]) -> Vec<Module> {

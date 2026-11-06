@@ -19,8 +19,19 @@ fn phyllotaxis(i: usize, spacing: f32) -> (f32, f32) {
     (r * t.cos(), r * t.sin())
 }
 
+/// 大半の星は小さく、大きなファイルだけが際立つように、対数を累乗して差を広げる。
 fn star_radius(lines: u32) -> f32 {
-    1.0 + 1.2 * ((lines + 1) as f32).log10()
+    0.7 + 0.32 * ((lines + 1) as f32).log10().powf(2.2)
+}
+
+/// パスから 0.0〜1.0 の値を 2 つ作る。乱数を使わず、同じファイルは常に同じ揺らぎになる。
+fn jitter(path: &str) -> (f32, f32) {
+    let mut h: u32 = 0x811c_9dc5;
+    for b in path.bytes() {
+        h = (h ^ b as u32).wrapping_mul(0x0100_0193);
+    }
+    let h2 = (h ^ (h >> 15)).wrapping_mul(0x2c1b_3c6d);
+    ((h % 10_000) as f32 / 10_000.0, ((h2 >> 8) % 10_000) as f32 / 10_000.0)
 }
 
 /// `assignment` はファイルごとのモジュール添字。`module_count` は「その他」も含めた数の上限で、
@@ -55,10 +66,22 @@ pub fn layout(files: &[FileEntry], assignment: &[usize], module_count: usize) ->
         }
         let mean: f32 =
             list.iter().map(|i| star_radius(files[*i].lines)).sum::<f32>() / list.len() as f32;
-        let spacing = mean * 3.0;
+        let spacing = mean.max(1.4) * 3.2;
         let mut extent = 0.0f32;
         for (k, i) in list.iter().enumerate() {
-            let (x, y) = phyllotaxis(k, spacing);
+            let (mut x, mut y) = phyllotaxis(k, spacing);
+            // 螺旋の規則性を崩して、自然な星の散らばりにする
+            let (ja, jb) = jitter(&files[*i].path);
+            let angle = ja * std::f32::consts::TAU;
+            x += angle.cos() * jb * spacing * 0.8;
+            y += angle.sin() * jb * spacing * 0.8;
+            // 星座ごとに少し潰して、円盤に見えないようにする
+            let (sa, sb) = jitter(&mi.to_string());
+            let stretch = 0.72 + sa * 0.3;
+            let tilt = sb * std::f32::consts::PI;
+            let (c, si) = (tilt.cos(), tilt.sin());
+            let (u, v) = (x * c + y * si, (y * c - x * si) * stretch);
+            (x, y) = (u * c - v * si, u * si + v * c);
             stars[*i] = Star {
                 x,
                 y,

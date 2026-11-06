@@ -632,6 +632,8 @@ dependencies = [
  "ccv-ai",
  "ccv-core",
  "gpui",
+ "tempfile",
+ "unicode-segmentation",
 ]
 
 [[package]]
