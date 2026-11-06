@@ -5,7 +5,7 @@ use crate::code::{CodeEvent, CodeView, group_digits, icon_button};
 use crate::ja_text::paragraph;
 use crate::model_picker::model_picker;
 use crate::palette::{Palette, PaletteEvent, PaletteMode};
-use crate::starmap::sky::build_sky;
+use crate::starmap::sky::{build_sky, preview_of};
 use crate::starmap::{StarMap, StarMapEvent};
 use crate::state::{AppState, ClaudeStatus};
 use crate::theme;
@@ -95,6 +95,7 @@ pub struct Workspace {
     deep_cancel: Arc<AtomicBool>,
     recent_reads: Vec<usize>,
     reads_total: usize,
+    read_stars: Vec<usize>,
     demo_applied: bool,
 }
 
@@ -191,6 +192,7 @@ impl Workspace {
             deep_cancel: Default::default(),
             recent_reads: Vec::new(),
             reads_total: 0,
+            read_stars: Vec::new(),
             demo_applied: false,
         }
     }
@@ -207,6 +209,7 @@ impl Workspace {
         let modules = analysis.as_ref().map_or(provisional, |a| a.modules.clone());
         let index = Arc::new(index);
         let sky = Arc::new(build_sky(&index, &modules));
+        self.save_preview(&sky, cx);
         let map = cx.new(|_| StarMap::new(sky, reduce_motion));
         let code = cx.new(|_| CodeView::new(self.repo.clone(), index.clone()));
         let subscriptions = vec![
@@ -224,7 +227,7 @@ impl Workspace {
             index.files.iter().enumerate().map(|(i, f)| (f.path.clone(), i)).collect();
         let side = analysis.is_some();
         map.update(cx, |m, cx| {
-            m.set_insets((24.0, 24.0, 104.0, if side { 372.0 } else { 24.0 }), cx)
+            m.set_insets((24.0, 24.0, 104.0, if side { 300.0 } else { 24.0 }), cx)
         });
         self.loaded = Some(Loaded {
             index,
@@ -242,8 +245,37 @@ impl Workspace {
     fn update_insets(&self, cx: &mut Context<Self>) {
         let Some(l) = &self.loaded else { return };
         let side = l.analysis.is_some() && !self.code_open;
-        let insets = (24.0, 24.0, 104.0, if side { 372.0 } else { 24.0 });
+        let insets = (24.0, 24.0, 104.0, if side { 300.0 } else { 24.0 });
         l.map.update(cx, |m, cx| m.set_insets(insets, cx));
+    }
+
+    /// ホーム画面の小さな星図のために保存する。失敗しても閲覧には影響しない。
+    fn save_preview(&self, sky: &crate::starmap::sky::Sky, cx: &Context<Self>) {
+        let store = cx.global::<AppState>().store.clone();
+        if let Err(e) = store.save_preview(&self.repo, &preview_of(sky)) {
+            eprintln!("小さな星図を保存できませんでした: {e}");
+        }
+    }
+
+    /// 状態に応じて空そのものを変える。パネルだけで知らせない。
+    fn update_sky_mood(&self, cx: &mut Context<Self>) {
+        let Some(l) = &self.loaded else { return };
+        let dim = match self.state {
+            AnalysisState::Failed { .. } | AnalysisState::Unavailable(_) => 0.42,
+            AnalysisState::Running { .. } => 0.62,
+            AnalysisState::Idle => 1.0,
+        };
+        let focus = self.deep.as_ref().map(|d| d.constellation);
+        let read = if matches!(self.state, AnalysisState::Running { .. }) {
+            self.read_stars.clone()
+        } else {
+            Vec::new()
+        };
+        l.map.update(cx, |m, cx| {
+            m.set_dim(dim, cx);
+            m.set_focus_constellation(focus, cx);
+            m.set_read(read, cx);
+        });
     }
 
     fn close_code(&mut self, cx: &mut Context<Self>) {
@@ -381,6 +413,7 @@ impl Workspace {
         }
         self.state = next;
         self.reads_total = 0;
+        self.read_stars.clear();
         self.show_reanalyze = false;
         let cancel = Arc::new(AtomicBool::new(false));
         self.cancel = cancel.clone();
@@ -401,6 +434,9 @@ impl Workspace {
         {
             self.recent_reads.push(i);
             self.reads_total += 1;
+            if !self.read_stars.contains(&i) {
+                self.read_stars.push(i);
+            }
             let start = self.recent_reads.len().saturating_sub(5);
             self.recent_reads.drain(..start);
             let lit = self.recent_reads.clone();
@@ -440,7 +476,8 @@ impl Workspace {
         l.modules = analysis.modules.clone();
         let sky = Arc::new(build_sky(&l.index, &l.modules));
         l.analysis = Some(analysis);
-        l.map.update(cx, |m, cx| m.set_sky(sky, cx));
+        l.map.update(cx, |m, cx| m.set_sky(sky.clone(), cx));
+        self.save_preview(&sky, cx);
         self.deep = None;
         self.tour = None;
     }
@@ -514,6 +551,7 @@ impl Workspace {
         };
         let position = tour.position();
         let visited: Vec<String> = tour.visited().into_iter().map(str::to_string).collect();
+        let upcoming: Vec<String> = tour.upcoming().into_iter().map(str::to_string).collect();
         AppState::set_tour_position(cx, &self.repo, position);
         self.open_path(
             &stop.path,
@@ -528,8 +566,10 @@ impl Workspace {
                 route.len().checked_sub(2).map(|i| route[i]),
                 route.last().copied(),
             );
+            let next: Vec<usize> =
+                upcoming.iter().filter_map(|p| l.file_at.get(p).copied()).collect();
             l.map.update(cx, |m, cx| {
-                m.set_route(route.clone(), cx);
+                m.set_route(route.clone(), next, cx);
                 if let Some(current) = current {
                     m.set_selected(Some(current), cx);
                     m.fly_between(previous, current, cx);
@@ -542,7 +582,7 @@ impl Workspace {
         self.tour = None;
         if let Some(l) = &self.loaded {
             l.map.update(cx, |m, cx| {
-                m.set_route(Vec::new(), cx);
+                m.set_route(Vec::new(), Vec::new(), cx);
             });
         }
         cx.notify();
@@ -654,7 +694,17 @@ impl Workspace {
                     lit.push(*i);
                 }
                 self.reads_total = 23;
-                l.map.update(cx, |m, cx| m.set_lit(lit, cx));
+                // 読み終えたファイルは灯したままにする
+                let mut read: Vec<usize> = (0..l.index.files.len())
+                    .filter(|i| !l.index.files[*i].binary)
+                    .step_by(9)
+                    .take(23)
+                    .collect();
+                read.retain(|i| !lit.contains(i));
+                self.read_stars = read;
+                let current: Vec<usize> = l.file_at.get(&activity).copied().into_iter().collect();
+                let _ = lit;
+                l.map.update(cx, |m, cx| m.set_lit(current, cx));
                 self.state = AnalysisState::Running {
                     model: ModelChoice::Sonnet,
                     activity,
@@ -814,6 +864,22 @@ impl Workspace {
                 .hover(|h| h.bg(theme::white()))
                 .child(label)
         };
+        let secondary = |id: &'static str, label: &'static str| {
+            div()
+                .id(id)
+                .flex_none()
+                .px(px(11.))
+                .py(px(5.))
+                .rounded(px(7.))
+                .cursor_pointer()
+                .border_1()
+                .border_color(theme::hairline_strong())
+                .text_color(theme::text())
+                .text_size(px(12.5))
+                .hover(|h| h.bg(theme::alpha(theme::white(), 0.07)))
+                .child(label)
+        };
+        let total_files = self.loaded.as_ref().map_or(0, |l| l.index.files.len());
         let picker = |cx: &mut Context<Self>| {
             let _ = cx;
             model_picker("model", current, move |model, _, cx| {
@@ -833,12 +899,10 @@ impl Workspace {
                         .child(div().text_color(theme::text()).child("AI 機能を使えません"))
                         .child(div().text_size(px(12.)).text_color(theme::text_muted()).child(message)),
                 )
-                .child(
-                    icon_button("install-claude", "入手方法を開く").on_click(|_, _, cx| {
-                        cx.open_url("https://claude.com/claude-code");
-                    }),
-                )
-                .child(primary("recheck", "再確認".into()).on_click(cx.listener(|this, _, _, cx| {
+                .child(primary("install-claude", "入手方法を開く".into()).on_click(|_, _, cx| {
+                    cx.open_url("https://claude.com/claude-code");
+                }))
+                .child(secondary("recheck", "再確認").on_click(cx.listener(|this, _, _, cx| {
                     this.state = AnalysisState::Idle;
                     cx.global_mut::<AppState>().claude_status = ClaudeStatus::Checking;
                     crate::state::check_claude(cx);
@@ -872,19 +936,22 @@ impl Workspace {
                             .text_size(px(12.))
                             .text_color(theme::text_muted())
                             .child(format!(
-                                "{} 件  {:02}:{:02}",
+                                "読了 {} / {}  {:02}:{:02}",
                                 self.reads_total,
+                                total_files,
                                 secs / 60,
                                 secs % 60
                             )),
                     )
                     .child(
-                        icon_button("cancel-analysis", "中断")
+                        secondary("cancel-analysis", "中断")
                             .on_click(cx.listener(|this, _, _, cx| this.cancel_analysis(cx))),
                     )
                     .into_any_element()
             }
-            AnalysisState::Failed { message, can_retry } => dock()
+            AnalysisState::Failed { message, can_retry } => {
+                let limit_reached = message.starts_with("利用枠");
+                dock()
                 .child(div().flex_none().size(px(7.)).rounded_full().bg(theme::danger()))
                 .child(
                     div()
@@ -907,7 +974,7 @@ impl Workspace {
                         ),
                 )
                 .child(picker(cx))
-                .when(can_retry, |d| {
+                .when(can_retry && !limit_reached, |d| {
                     d.child(primary("retry", "再試行".into()).on_click(cx.listener(
                         |this, _, _, cx| {
                             this.state = AnalysisState::Idle;
@@ -915,7 +982,17 @@ impl Workspace {
                         },
                     )))
                 })
-                .into_any_element(),
+                // 利用枠の上限では、すぐの再試行を主役にしない
+                .when(can_retry && limit_reached, |d| {
+                    d.child(secondary("retry", "再試行").on_click(cx.listener(
+                        |this, _, _, cx| {
+                            this.state = AnalysisState::Idle;
+                            this.run_analysis(cx);
+                        },
+                    )))
+                })
+                .into_any_element()
+            }
             AnalysisState::Idle if !has_analysis => dock()
                 .child(picker(cx))
                 .child(
@@ -1169,7 +1246,7 @@ impl Workspace {
                 .p(px(18.))
                 .overflow_y_scroll()
                 .rounded(px(12.))
-                .bg(theme::alpha(theme::panel_raised(), 0.96))
+                .bg(theme::panel_raised())
                 .border_1()
                 .border_color(theme::hairline_strong())
                 .occlude()
@@ -1198,7 +1275,7 @@ impl Workspace {
                         .text_size(px(11.5))
                         .font_family(theme::CODE_FONT)
                         .text_color(theme::text_muted())
-                        .child(format!("{} files · {} lines", group_digits(panel.files as u64), group_digits(panel.lines))),
+                        .child(format!("{} ファイル · {} 行", group_digits(panel.files as u64), group_digits(panel.lines))),
                 )
                 .when(!panel.summary.is_empty(), |d| {
                     d.child(div().mt(px(12.)).child(paragraph(
@@ -1253,7 +1330,7 @@ impl Workspace {
             Some(i) => {
                 let f = &l.index.files[i];
                 format!(
-                    "{}  ·  {} lines  ·  直近 1 年で {} 回変更",
+                    "{}  ·  {} 行  ·  直近 1 年で {} 回変更",
                     f.path,
                     group_digits(f.lines as u64),
                     f.churn
@@ -1262,25 +1339,44 @@ impl Workspace {
             None => {
                 let total: u64 = l.index.files.iter().map(|f| f.lines as u64).sum();
                 format!(
-                    "{} files · {} lines · 星座 {}　　星を押すとコード　星座名を押すと解説　⌘ + スクロールで拡大",
+                    "{} ファイル · {} 行 · 星座 {}",
                     group_digits(l.index.files.len() as u64),
                     group_digits(total),
                     sky.constellations.len()
                 )
             }
         };
+        let legend = hovered.is_none();
         Some(
             div()
                 .absolute()
                 .bottom(px(16.))
                 .left(px(22.))
                 .right(px(22.))
+                .flex()
+                .items_center()
+                .gap(px(18.))
                 .overflow_hidden()
                 .whitespace_nowrap()
                 .text_size(px(11.5))
                 .font_family(theme::CODE_FONT)
                 .text_color(if hovered.is_some() { theme::teal() } else { theme::text_muted() })
                 .child(content)
+                .when(legend, |d| {
+                    let key = |color: gpui::Rgba, label: &'static str| {
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(5.))
+                            .child(div().size(px(6.)).rounded_full().bg(color))
+                            .child(label)
+                    };
+                    d.child(key(theme::white(), "コード"))
+                        .child(key(theme::star_test(), "テスト"))
+                        .child(key(theme::star_doc(), "文書と設定"))
+                        .child(div().flex_1())
+                        .child("星でコード  星座名で解説  ⌘ + スクロールで拡大")
+                })
                 .into_any_element(),
         )
     }
@@ -1344,6 +1440,7 @@ impl Render for Workspace {
         }
 
         self.update_insets(cx);
+        self.update_sky_mood(cx);
         let dock = self.render_dock(cx);
         let tour_note = self.render_tour_note(window, cx);
         let deep = self.render_deep(window, cx);
@@ -1408,7 +1505,7 @@ impl Render for Workspace {
                     .justify_center()
                     .items_start()
                     .pt(px(96.))
-                    .bg(theme::alpha(theme::space(), 0.55))
+                    .bg(theme::alpha(theme::space(), 0.34))
                     // 後ろの星図へ入力を通さない。外側を押すと閉じる
                     .occlude()
                     .on_mouse_down(

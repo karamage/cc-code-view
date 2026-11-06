@@ -29,6 +29,10 @@ pub fn star_color(brightness: f32) -> Hsla {
     Rgba { r: lerp(0.42, 1.0), g: lerp(0.44, 0.98), b: lerp(0.78, 1.0), a: lerp(0.62, 1.0) }.into()
 }
 
+/// 星の種類の色。意味を持たせ、彩度は抑える。
+pub fn star_test() -> Rgba { rgb(0x8db4ff) }
+pub fn star_doc() -> Rgba { rgb(0xe9c49f) }
+
 pub const UI_FONT: &str = ".SystemUIFont";
 pub const CODE_FONT: &str = "JetBrains Mono";
 

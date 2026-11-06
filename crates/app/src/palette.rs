@@ -322,7 +322,7 @@ impl Palette {
                             .child(
                                 div()
                                     .flex_none()
-                                    .w(px(236.))
+                                    .w(px(208.))
                                     .overflow_hidden()
                                     .text_color(theme::text_muted())
                                     .child(format!("{}:{}", hit.path, hit.line + 1)),
@@ -422,9 +422,25 @@ impl Render for Palette {
                     cx.processor(|this, range: Range<usize>, _, cx| this.render_rows(range, cx)),
                 )
                 .track_scroll(self.scroll.clone())
-                .h(px(34. * 12.))
+                .h(px(34. * 11.))
                 .into_any_element()
             })
+            .child(
+                div()
+                    .flex_none()
+                    .h(px(32.))
+                    .px(px(16.))
+                    .flex()
+                    .items_center()
+                    .gap(px(16.))
+                    .border_t_1()
+                    .border_color(theme::hairline())
+                    .text_size(px(11.))
+                    .text_color(theme::text_muted())
+                    .child("↑↓ 選択")
+                    .child("⏎ 開く")
+                    .child("esc 閉じる"),
+            )
     }
 }
 

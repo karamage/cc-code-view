@@ -26,6 +26,14 @@ fn is_word(c: char) -> bool {
         || matches!(c, 'ァ'..='ヶ' | 'ー')
 }
 
+fn is_kanji(c: char) -> bool {
+    matches!(c, '\u{4E00}'..='\u{9FFF}' | '\u{3400}'..='\u{4DBF}' | '々')
+}
+
+fn is_hiragana(c: char) -> bool {
+    matches!(c, 'ぁ'..='ゖ')
+}
+
 /// 文字幅を `advance` で測りながら行に分ける。
 pub fn break_lines(text: &str, max_width: f32, advance: &dyn Fn(char) -> f32) -> Vec<String> {
     let mut out = Vec::new();
@@ -41,7 +49,8 @@ fn break_paragraph(
     advance: &dyn Fn(char) -> f32,
     out: &mut Vec<String>,
 ) {
-    // まず、切れない塊（語、または 1 文字と禁則でつながる文字）に分ける
+    // 文節に近い塊に分ける。漢字やカタカナ、欧文の語に、続くひらがなと句読点をつなげる。
+    // 「レビュー / し、」のような読みにくい切れ目を避けるため
     let chars: Vec<char> = text.chars().collect();
     let mut chunks: Vec<String> = Vec::new();
     let mut i = 0;
@@ -58,10 +67,20 @@ fn break_paragraph(
                     chunk.push(chars[i]);
                     i += 1;
                 }
+            } else if is_kanji(chars[i]) {
+                while i < chars.len() && is_kanji(chars[i]) {
+                    chunk.push(chars[i]);
+                    i += 1;
+                }
             } else {
                 chunk.push(chars[i]);
                 i += 1;
             }
+        }
+        // 続くひらがなは同じ文節とみなす。ただし読点のあとでは切れるようにする
+        while i < chars.len() && is_hiragana(chars[i]) {
+            chunk.push(chars[i]);
+            i += 1;
         }
         // 行頭禁則の文字は前の塊につなげる
         while i < chars.len() && no_line_start(chars[i]) {
@@ -85,7 +104,9 @@ fn break_paragraph(
         if w > max_width {
             for c in chunk.chars() {
                 let a = advance(c);
-                if used + a > max_width && !line.is_empty() {
+                // 文字単位で切るときも禁則を守る。多少はみ出しても句読点を行頭に送らない
+                let can_break = !no_line_start(c) && !line.chars().last().is_some_and(no_line_end);
+                if used + a > max_width && !line.is_empty() && can_break {
                     out.push(std::mem::take(&mut line));
                     used = 0.0;
                 }
@@ -169,6 +190,17 @@ mod tests {
         let got = lines(text, 6.0);
         assert!(got.iter().any(|l| l.contains("claude-p")), "{got:?}");
         assert_eq!(got.concat().replace(' ', ""), text.replace(' ', ""));
+    }
+
+    #[test]
+    fn lines_break_between_phrases() {
+        // 「レビュー」と「し、」を別の行にしない
+        for width in 8..14 {
+            for line in lines("手元のツールでレビューし、人が確認してから投稿する", width as f32) {
+                assert!(!line.starts_with("し"), "{line:?} width={width}");
+                assert!(!line.starts_with("て"), "{line:?} width={width}");
+            }
+        }
     }
 
     #[test]

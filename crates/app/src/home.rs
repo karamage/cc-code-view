@@ -1,23 +1,34 @@
 //! リポジトリの一覧と登録。
+use crate::code::icon_button;
 use crate::state::AppState;
 use crate::theme;
 use ccv_core::churn::is_git_repo;
-use ccv_core::model::Analysis;
+use ccv_core::model::{Analysis, SkyPreview};
 use gpui::{
     Context, EventEmitter, ExternalPaths, FontWeight, PathPromptOptions, Render, SharedString,
     Window, canvas, div, prelude::*, px,
 };
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Instant;
 
 pub enum HomeEvent {
     Open(PathBuf),
 }
 
+/// 保存された情報。描画のたびにファイルを読まないよう、一度だけ読む。
+#[derive(Clone)]
+struct RepoInfo {
+    status: String,
+    preview: Option<Arc<SkyPreview>>,
+}
+
 pub struct Home {
     error: Option<SharedString>,
     opened: Instant,
     reduce_motion: bool,
+    info: HashMap<PathBuf, RepoInfo>,
 }
 
 impl EventEmitter<HomeEvent> for Home {}
@@ -35,9 +46,34 @@ pub fn validate_repo(path: &Path) -> Result<PathBuf, String> {
     path.canonicalize().map_err(|e| e.to_string())
 }
 
+fn status_line(analysis: Option<&Analysis>) -> String {
+    match analysis {
+        Some(a) => format!(
+            "{} で解析済み · 星座 {} · 停留所 {}",
+            a.model.label(),
+            a.modules.len(),
+            a.tour.len()
+        ),
+        None => "まだ解析していません".to_string(),
+    }
+}
+
 impl Home {
     pub fn new(reduce_motion: bool) -> Home {
-        Home { error: None, opened: Instant::now(), reduce_motion }
+        Home { error: None, opened: Instant::now(), reduce_motion, info: HashMap::new() }
+    }
+
+    fn info_for(&mut self, path: &Path, cx: &Context<Self>) -> RepoInfo {
+        if let Some(info) = self.info.get(path) {
+            return info.clone();
+        }
+        let store = cx.global::<AppState>().store.clone();
+        let info = RepoInfo {
+            status: status_line(store.load_analysis(path).as_ref()),
+            preview: store.load_preview(path).map(Arc::new),
+        };
+        self.info.insert(path.to_path_buf(), info.clone());
+        info
     }
 
     fn add(&mut self, path: &Path, cx: &mut Context<Self>) {
@@ -85,6 +121,7 @@ impl Home {
                         Ok(path) => {
                             this.error = None;
                             AppState::relocate(cx, &old, path);
+                            this.info.clear();
                         }
                         Err(message) => this.error = Some(message.into()),
                     }
@@ -94,26 +131,95 @@ impl Home {
         })
         .detach();
     }
-}
 
-fn status_line(analysis: Option<&Analysis>) -> String {
-    match analysis {
-        Some(a) => format!("{} で解析済み · 星座 {} · 停留所 {}", a.model.label(), a.modules.len(), a.tour.len()),
-        None => "未解析".to_string(),
+    fn render_hero(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .flex()
+            .flex_col()
+            .child(
+                div()
+                    .text_size(px(11.))
+                    .text_color(theme::teal())
+                    .font_family(theme::CODE_FONT)
+                    .child("CC CODE VIEW"),
+            )
+            .child(
+                div()
+                    .mt(px(14.))
+                    .text_size(px(38.))
+                    .line_height(px(50.))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child("コードベースの星図を、"),
+            )
+            .child(
+                div()
+                    .text_size(px(38.))
+                    .line_height(px(50.))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child("AI の案内で航海する。"),
+            )
+            .child(
+                div()
+                    .mt(px(16.))
+                    .text_size(px(14.))
+                    .line_height(px(24.))
+                    .text_color(theme::text_muted())
+                    .child("クローンしたリポジトリを登録すると、ファイルが星になり、"),
+            )
+            .child(
+                div()
+                    .text_size(px(14.))
+                    .line_height(px(24.))
+                    .text_color(theme::text_muted())
+                    .child("Claude が読む順番を案内します。"),
+            )
+            .child(
+                div()
+                    .mt(px(28.))
+                    .flex()
+                    .items_center()
+                    .gap(px(14.))
+                    .child(
+                        div()
+                            .id("add-repo")
+                            .px(px(16.))
+                            .py(px(9.))
+                            .rounded(px(8.))
+                            .cursor_pointer()
+                            .bg(theme::violet())
+                            .text_color(theme::space())
+                            .text_size(px(13.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .hover(|h| h.bg(theme::white()))
+                            .child("リポジトリを登録")
+                            .on_click(cx.listener(|this, _, _, cx| this.choose(cx))),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .text_color(theme::text_muted())
+                            .child("フォルダーをここへドロップしても登録できます"),
+                    ),
+            )
     }
 }
 
 impl Render for Home {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let intro = if self.reduce_motion { 1.0 } else { self.opened.elapsed().as_secs_f32() / 2.2 };
+        let intro = if self.reduce_motion {
+            1.0
+        } else {
+            self.opened.elapsed().as_secs_f32() / 2.2
+        };
         if intro < 1.0 {
             window.request_animation_frame();
         }
         let intro = intro.min(1.0);
-        let state = cx.global::<AppState>();
-        let store = state.store.clone();
-        let repos = state.settings.repos.clone();
+        let repos = cx.global::<AppState>().settings.repos.clone();
         let empty = repos.is_empty();
+        let infos: Vec<RepoInfo> = repos.iter().map(|r| self.info_for(&r.path, cx)).collect();
+        // 最後に開いた順の先頭のリポジトリの空を背景にする
+        let backdrop = infos.iter().find_map(|i| i.preview.clone());
 
         div()
             .id("home")
@@ -132,7 +238,12 @@ impl Render for Home {
                 canvas(
                     |_, _, _| {},
                     move |bounds, _, window, _| {
-                        crate::starmap::paint::paint_backdrop(bounds, intro, window);
+                        crate::starmap::paint::paint_backdrop(
+                            bounds,
+                            intro,
+                            backdrop.as_deref(),
+                            window,
+                        );
                         crate::state::mark_first_paint();
                     },
                 )
@@ -147,78 +258,65 @@ impl Render for Home {
                     .left_0()
                     .right_0()
                     .h(px(44.))
-                    .on_mouse_down(gpui::MouseButton::Left, |_, window, _| window.start_window_move()),
+                    .on_mouse_down(gpui::MouseButton::Left, |_, window, _| {
+                        window.start_window_move()
+                    }),
             )
             .child(
                 div()
                     .id("home-content")
                     .relative()
-                    .w(px(600.))
-                    .ml(px(88.))
+                    .w(px(560.))
+                    .ml(px(72.))
                     .h_full()
                     .flex()
                     .flex_col()
-                    .pt(px(if empty { 210. } else { 96. }))
+                    .pt(px(if empty { 210. } else { 76. }))
                     .pb(px(40.))
                     .overflow_y_scroll()
-                    .child(
-                        div()
-                            .text_size(px(11.))
-                            .text_color(theme::teal())
-                            .font_family(theme::CODE_FONT)
-                            .child("CC CODE VIEW"),
-                    )
-                    .child(
-                        div()
-                            .mt(px(14.))
-                            .text_size(px(38.))
-                            .line_height(px(50.))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child("コードベースの星図を、"),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(38.))
-                            .line_height(px(50.))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child("AI の案内で航海する。"),
-                    )
-                    .child(
-                        div()
-                            .mt(px(16.))
-                            .text_size(px(14.))
-                            .line_height(px(24.))
-                            .text_color(theme::text_muted())
-                            .child("クローンしたリポジトリを登録すると、ファイルが星になり、Claude が読む順番を案内します。"),
-                    )
-                    .child(
-                        div()
-                            .mt(px(28.))
-                            .flex()
-                            .items_center()
-                            .gap(px(14.))
-                            .child(
-                                div()
-                                    .id("add-repo")
-                                    .px(px(16.))
-                                    .py(px(9.))
-                                    .rounded(px(8.))
-                                    .cursor_pointer()
-                                    .bg(theme::violet())
-                                    .text_color(theme::space())
-                                    .text_size(px(13.))
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .hover(|h| h.bg(theme::white()))
-                                    .child("リポジトリを登録")
-                                    .on_click(cx.listener(|this, _, _, cx| this.choose(cx))),
-                            )
-                            .child(
-                                div()
-                                    .text_size(px(12.))
-                                    .text_color(theme::text_muted())
-                                    .child("フォルダーをここにドロップしても登録できます"),
-                            ),
-                    )
+                    .when(empty, |d| d.child(self.render_hero(cx)))
+                    // 再訪のときは宣伝を繰り返さず、一覧を主役にする
+                    .when(!empty, |d| {
+                        d.child(
+                            div()
+                                .flex()
+                                .items_end()
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_col()
+                                        .gap(px(6.))
+                                        .flex_1()
+                                        .child(
+                                            div()
+                                                .text_size(px(11.))
+                                                .text_color(theme::teal())
+                                                .font_family(theme::CODE_FONT)
+                                                .child("CC CODE VIEW"),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_size(px(26.))
+                                                .font_weight(FontWeight::SEMIBOLD)
+                                                .child("どの空を読みますか"),
+                                        ),
+                                )
+                                .child(
+                                    div()
+                                        .id("add-repo-compact")
+                                        .px(px(12.))
+                                        .py(px(6.))
+                                        .rounded(px(7.))
+                                        .cursor_pointer()
+                                        .border_1()
+                                        .border_color(theme::hairline_strong())
+                                        .text_size(px(12.5))
+                                        .hover(|h| h.bg(theme::alpha(theme::white(), 0.07)))
+                                        .child("＋ 登録")
+                                        .on_click(cx.listener(|this, _, _, cx| this.choose(cx))),
+                                ),
+                        )
+                    })
                     .when_some(self.error.clone(), |d, message| {
                         d.child(
                             div()
@@ -229,44 +327,59 @@ impl Render for Home {
                                 .child(message),
                         )
                     })
-                    .when(!empty, |d| {
-                        d.child(
-                            div()
-                                .mt(px(44.))
-                                .mb(px(6.))
-                                .text_size(px(12.))
-                                .text_color(theme::text_muted())
-                                .child("登録済みのリポジトリ"),
-                        )
-                    })
-                    .children(repos.into_iter().enumerate().map(|(i, repo)| {
+                    .when(!empty, |d| d.child(div().h(px(22.))))
+                    .children(repos.into_iter().zip(infos).enumerate().map(|(i, (repo, info))| {
                         let exists = repo.path.exists();
-                        let analysis = store.load_analysis(&repo.path);
                         let path = repo.path.clone();
                         let path_for_remove = repo.path.clone();
                         let path_for_relocate = repo.path.clone();
                         let line = if exists {
-                            status_line(analysis.as_ref())
+                            info.status.clone()
                         } else {
                             "見つかりません。移動した場合は場所を指定してください。".to_string()
                         };
+                        let preview = info.preview.clone();
                         div()
                             .id(("repo", i))
                             .group("repo")
-                            .py(px(14.))
-                            .px(px(12.))
-                            .mx(px(-12.))
-                            .rounded(px(8.))
+                            .mb(px(8.))
+                            .p(px(10.))
+                            .rounded(px(12.))
+                            .bg(theme::alpha(theme::panel_raised(), 0.82))
+                            .border_1()
+                            .border_color(theme::hairline())
                             .flex()
                             .items_center()
                             .gap(px(16.))
                             .when(exists, |d| {
                                 d.cursor_pointer()
-                                    .hover(|h| h.bg(theme::alpha(theme::violet(), 0.06)))
+                                    .hover(|h| h.border_color(theme::violet()))
                                     .on_click(cx.listener(move |_, _, _, cx| {
                                         cx.emit(HomeEvent::Open(path.clone()))
                                     }))
                             })
+                            .child(
+                                div()
+                                    .flex_none()
+                                    .w(px(112.))
+                                    .h(px(72.))
+                                    .rounded(px(8.))
+                                    .overflow_hidden()
+                                    .bg(theme::space())
+                                    .child(
+                                        canvas(
+                                            |_, _, _| {},
+                                            move |bounds, _, window, _| {
+                                                if let Some(p) = &preview {
+                                                    crate::starmap::paint::paint_preview(
+                                                        bounds, p, 0.26, 1.0, window,
+                                                    );
+                                                }
+                                            },
+                                        )
+                                        .size_full(),
+                                    ),
+                            )
                             .child(
                                 div()
                                     .flex_1()
@@ -277,12 +390,12 @@ impl Render for Home {
                                     .child(
                                         div()
                                             .text_size(px(15.))
-                                            .font_weight(FontWeight::MEDIUM)
+                                            .font_weight(FontWeight::SEMIBOLD)
                                             .child(repo.name.clone()),
                                     )
                                     .child(
                                         div()
-                                            .text_size(px(12.))
+                                            .text_size(px(11.5))
                                             .font_family(theme::CODE_FONT)
                                             .text_color(theme::text_muted())
                                             .overflow_hidden()
@@ -301,26 +414,34 @@ impl Render for Home {
                                     ),
                             )
                             .when(!exists, |d| {
-                                d.child(
-                                    crate::code::icon_button("relocate", "場所を指定").on_click(
-                                        cx.listener(move |this, _, _, cx| {
-                                            this.relocate(path_for_relocate.clone(), cx)
-                                        }),
-                                    ),
-                                )
+                                d.child(icon_button("relocate", "場所を指定").on_click(cx.listener(
+                                    move |this, _, _, cx| {
+                                        this.relocate(path_for_relocate.clone(), cx)
+                                    },
+                                )))
                             })
                             .child(
                                 // 普段は隠し、行に乗せたときだけ出す
                                 div().invisible().group_hover("repo", |s| s.visible()).child(
-                                    crate::code::icon_button("remove", "登録解除").on_click(
-                                        cx.listener(move |_, _, _, cx| {
+                                    icon_button("remove", "登録解除").on_click(cx.listener(
+                                        move |_, _, _, cx| {
                                             cx.stop_propagation();
                                             AppState::unregister(cx, &path_for_remove);
                                             cx.notify();
-                                        }),
-                                    ),
+                                        },
+                                    )),
                                 ),
                             )
+                            .when(exists, |d| {
+                                d.child(
+                                    div()
+                                        .flex_none()
+                                        .pr(px(6.))
+                                        .text_size(px(16.))
+                                        .text_color(theme::text_muted())
+                                        .child("›"),
+                                )
+                            })
                     })),
             )
     }
@@ -337,7 +458,11 @@ mod tests {
         std::fs::write(&file, "x").unwrap();
         assert!(validate_repo(&file).unwrap_err().contains("フォルダー"));
         assert!(validate_repo(dir.path()).unwrap_err().contains("Git リポジトリ"));
-        std::process::Command::new("git").args(["init", "-q"]).current_dir(dir.path()).status().unwrap();
+        std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(dir.path())
+            .status()
+            .unwrap();
         assert!(validate_repo(dir.path()).is_ok());
     }
 }

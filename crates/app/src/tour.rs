@@ -54,6 +54,14 @@ impl TourPlayer {
         self.stops.get(found)
     }
 
+    /// これから通る有効な停留所のパス。
+    pub fn upcoming(&self) -> Vec<&str> {
+        (self.position + 1..self.stops.len())
+            .filter(|i| self.valid[*i])
+            .map(|i| self.stops[i].path.as_str())
+            .collect()
+    }
+
     /// ここまでに通過した有効な停留所のパス。航路を描くのに使う。
     pub fn visited(&self) -> Vec<&str> {
         (0..=self.position.min(self.stops.len().saturating_sub(1)))
@@ -78,6 +86,7 @@ mod tests {
         assert!(p.next().is_none());
         assert_eq!(p.position(), 2);
         assert_eq!(p.visited().len(), 2);
+        assert!(p.upcoming().is_empty());
         assert_eq!(p.prev().unwrap().title, "a");
         assert!(p.prev().is_none());
     }

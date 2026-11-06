@@ -1,6 +1,6 @@
 //! 星図の描画。画面内の要素だけを描く。
 use super::camera::{Camera, Lod, lod};
-use super::sky::Sky;
+use super::sky::{Sky, StarKind};
 use crate::theme;
 use gpui::{
     App, Bounds, BoxShadow, ContentMask, Font, FontFeatures, FontStyle, FontWeight, Hsla,
@@ -20,6 +20,14 @@ pub struct Frame<'a> {
     pub lit: &'a [usize],
     pub selected: Option<usize>,
     pub route: &'a [usize],
+    /// これから通る停留所
+    pub upcoming: &'a [usize],
+    /// AI が読み終えた星。空が変わって進み具合が見える
+    pub read: &'a [usize],
+    /// 空全体の明るさ。エラー時や解析中に下げる
+    pub dim: f32,
+    /// 選ばれた星座。ほかを暗くする
+    pub focus_constellation: Option<usize>,
     /// 0.0〜1.0。星座名を灯す演出の進行
     pub reveal: f32,
 }
@@ -30,6 +38,14 @@ fn circle(window: &mut Window, center: (f32, f32), radius: f32, color: Hsla) {
         size: size(px(radius * 2.0), px(radius * 2.0)),
     };
     window.paint_quad(quad(b, px(radius), color, px(0.), gpui::transparent_black(), Default::default()));
+}
+
+fn ring(window: &mut Window, center: (f32, f32), radius: f32, color: Hsla) {
+    let b = Bounds {
+        origin: point(px(center.0 - radius), px(center.1 - radius)),
+        size: size(px(radius * 2.0), px(radius * 2.0)),
+    };
+    window.paint_quad(quad(b, px(radius), gpui::transparent_black(), px(1.2), color, Default::default()));
 }
 
 fn glow(window: &mut Window, center: (f32, f32), radius: f32, blur: f32, color: Hsla) {
@@ -91,14 +107,6 @@ fn text(
     let _ = line.paint(point(px(x), px(at.1)), px(size_px * 1.3), window, cx);
 }
 
-fn constellation_of(sky: &Sky, star: usize) -> Option<usize> {
-    let module = sky.stars.get(star)?.module;
-    sky.constellations.iter().position(|c| match c.module_index {
-        Some(m) => m == module,
-        None => module >= sky.constellations.iter().filter(|x| x.module_index.is_some()).count(),
-    })
-}
-
 /// 視差で動く遠景の星。決定的に作る。
 fn paint_field(window: &mut Window, origin: (f32, f32), vp: (f32, f32), cam: Camera) {
     const COUNT: u32 = 260;
@@ -121,7 +129,12 @@ fn paint_field(window: &mut Window, origin: (f32, f32), vp: (f32, f32), cam: Cam
 }
 
 /// ホーム画面の背景。`t` は 0.0〜1.0 の入場の進行で、星座が右上から順に灯る。
-pub fn paint_backdrop(bounds: Bounds<Pixels>, t: f32, window: &mut Window) {
+pub fn paint_backdrop(
+    bounds: Bounds<Pixels>,
+    t: f32,
+    preview: Option<&ccv_core::model::SkyPreview>,
+    window: &mut Window,
+) {
     window.with_content_mask(Some(ContentMask { bounds }), |window| {
         let origin = (f32::from(bounds.origin.x), f32::from(bounds.origin.y));
         let vp = (f32::from(bounds.size.width), f32::from(bounds.size.height));
@@ -130,6 +143,16 @@ pub fn paint_backdrop(bounds: Bounds<Pixels>, t: f32, window: &mut Window) {
         glow(window, at(0.86, 0.3), 220.0, 300.0, theme::alpha(theme::nebula(), 0.95));
         glow(window, at(0.72, 0.84), 150.0, 240.0, theme::alpha(theme::nebula(), 0.7));
         paint_field(window, origin, vp, Camera { center: (0.0, 0.0), zoom: 1.0 });
+
+        // 登録済みなら、飾りではなく利用者自身の空を見せる
+        if let Some(preview) = preview {
+            let area = Bounds {
+                origin: point(px(origin.0 + vp.0 * 0.5), px(origin.1 + vp.1 * 0.05)),
+                size: size(px(vp.0 * 0.48), px(vp.1 * 0.9)),
+            };
+            paint_preview(area, preview, 1.0, t, window);
+            return;
+        }
 
         // 右側に、航路をなす星座を置く。座標はウィンドウに対する割合
         const STARS: [(f32, f32, f32); 14] = [
@@ -187,6 +210,52 @@ pub fn paint_backdrop(bounds: Bounds<Pixels>, t: f32, window: &mut Window) {
     });
 }
 
+/// リポジトリの実際の星図を、枠に収めて描く。`t` は入場の進行。
+pub fn paint_preview(
+    bounds: Bounds<Pixels>,
+    preview: &ccv_core::model::SkyPreview,
+    star_scale: f32,
+    t: f32,
+    window: &mut Window,
+) {
+    let (ox, oy) = (f32::from(bounds.origin.x), f32::from(bounds.origin.y));
+    let (w, h) = (f32::from(bounds.size.width), f32::from(bounds.size.height));
+    let side = w.min(h);
+    let at = |x: f32, y: f32| (ox + (w - side) / 2.0 + x * side, oy + (h - side) / 2.0 + y * side);
+    let mut path = PathBuilder::stroke(px((star_scale * 0.5).clamp(0.5, 0.9)));
+    let mut any = false;
+    for (a, b) in &preview.lines {
+        let (pa, pb) = (preview.stars[*a as usize], preview.stars[*b as usize]);
+        let (p, q) = (at(pa.0, pa.1), at(pb.0, pb.1));
+        path.move_to(point(px(p.0), px(p.1)));
+        path.line_to(point(px(q.0), px(q.1)));
+        any = true;
+    }
+    if any && t > 0.05 && let Ok(path) = path.build() {
+        window.paint_path(path, theme::alpha(theme::violet(), 0.5 * t));
+    }
+    for (i, (x, y, radius, brightness)) in preview.stars.iter().enumerate() {
+        let amount = (t * 1.6 - i as f32 / preview.stars.len().max(1) as f32 * 0.6).clamp(0.0, 1.0);
+        if amount <= 0.0 {
+            continue;
+        }
+        let p = at(*x, *y);
+        if *radius > 0.0 {
+            let r = (radius * star_scale).clamp(0.8, 5.5);
+            if star_scale > 0.6 {
+                glow(window, p, r * 0.8, r * 3.0, theme::alpha(theme::violet(), 0.4 * amount));
+            }
+            let mut c = theme::star_color(0.6 + 0.4 * brightness);
+            c.a *= amount;
+            circle(window, p, r, c);
+        } else {
+            let mut c = theme::star_color(brightness * 0.6);
+            c.a *= 0.45 * amount;
+            circle(window, p, (star_scale * 0.7).max(0.45), c);
+        }
+    }
+}
+
 pub fn paint(bounds: Bounds<Pixels>, f: &Frame<'_>, window: &mut Window, cx: &mut App) {
     window.with_content_mask(Some(ContentMask { bounds }), |window| {
         let origin = (f32::from(bounds.origin.x), f32::from(bounds.origin.y));
@@ -213,14 +282,17 @@ pub fn paint(bounds: Bounds<Pixels>, f: &Frame<'_>, window: &mut Window, cx: &mu
             let center = to_screen(c.center);
             let radius = (c.extent * cam.zoom).max(10.0);
             if on_screen(center, radius * 2.0) {
-                let color = theme::alpha(theme::nebula(), 0.55);
+                let color = theme::alpha(theme::nebula(), 0.55 * f.dim);
                 glow(window, center, radius * 0.72, radius * 0.9, color);
             }
         }
 
         // 星座間の依存。普段は太いものだけを淡く、注目中の星座は全部を描く
         {
-            let focus = f.hovered_constellation.or(f.hovered.and_then(|i| constellation_of(sky, i)));
+            let focus = f
+                .hovered_constellation
+                .or(f.focus_constellation)
+                .or(f.hovered.map(|i| sky.star_constellation[i] as usize));
             let max_links = sky.module_links.iter().map(|l| l.2).max().unwrap_or(1) as f32;
             let resting = sky.constellations.len();
             const BANDS: usize = 3;
@@ -266,19 +338,30 @@ pub fn paint(bounds: Bounds<Pixels>, f: &Frame<'_>, window: &mut Window, cx: &mu
             }
         }
 
-        // 星座の形
+        // 星座の形。選ばれた星座があれば、ほかは沈める
         let mut figure = PathBuilder::stroke(px(0.9));
         let mut any_figure = false;
+        let mut quiet = PathBuilder::stroke(px(0.7));
+        let mut any_quiet = false;
         for &(a, b) in &sky.figure_lines {
             let (p, q) = (to_screen(f.positions[a as usize]), to_screen(f.positions[b as usize]));
-            if on_screen(p, 60.0) || on_screen(q, 60.0) {
-                figure.move_to(point(px(p.0), px(p.1)));
-                figure.line_to(point(px(q.0), px(q.1)));
-                any_figure = true;
+            if !on_screen(p, 60.0) && !on_screen(q, 60.0) {
+                continue;
             }
+            let selected = f
+                .focus_constellation
+                .is_none_or(|c| sky.star_constellation[a as usize] as usize == c);
+            let (builder, flag) =
+                if selected { (&mut figure, &mut any_figure) } else { (&mut quiet, &mut any_quiet) };
+            builder.move_to(point(px(p.0), px(p.1)));
+            builder.line_to(point(px(q.0), px(q.1)));
+            *flag = true;
+        }
+        if any_quiet && let Ok(path) = quiet.build() {
+            window.paint_path(path, theme::alpha(theme::violet(), 0.16 * f.dim));
         }
         if any_figure && let Ok(path) = figure.build() {
-            window.paint_path(path, theme::alpha(theme::violet(), 0.62));
+            window.paint_path(path, theme::alpha(theme::violet(), 0.62 * f.dim));
         }
 
         // カーソルを乗せた星の依存（ファイル単位）
@@ -298,31 +381,27 @@ pub fn paint(bounds: Bounds<Pixels>, f: &Frame<'_>, window: &mut Window, cx: &mu
             }
         }
 
-        // ツアーの航路
+        // ツアーの航路。古い区間は細く薄くし、直近の移動だけを際立たせる
         if f.route.len() > 1 {
-            let mut path = PathBuilder::stroke(px(1.6));
-            for (i, star) in f.route.iter().enumerate() {
-                let p = to_screen(f.positions[*star]);
-                if i == 0 {
-                    path.move_to(point(px(p.0), px(p.1)));
-                } else {
-                    path.line_to(point(px(p.0), px(p.1)));
-                }
-            }
-            if let Ok(path) = path.build() {
-                window.paint_path(path, theme::alpha(theme::teal(), 0.9));
-            }
-            for star in f.route {
-                let p = to_screen(f.positions[*star]);
-                if on_screen(p, 12.0) {
-                    circle(window, p, 4.0, theme::teal().into());
-                    circle(window, p, 2.2, theme::space().into());
+            let last = f.route.len() - 2;
+            for (i, pair) in f.route.windows(2).enumerate() {
+                let (p, q) = (to_screen(f.positions[pair[0]]), to_screen(f.positions[pair[1]]));
+                let current = i == last;
+                let mut path = PathBuilder::stroke(px(if current { 1.6 } else { 0.9 }));
+                let mid = ((p.0 + q.0) / 2.0, (p.1 + q.1) / 2.0);
+                let (dx, dy) = (q.0 - p.0, q.1 - p.1);
+                path.move_to(point(px(p.0), px(p.1)));
+                path.curve_to(point(px(q.0), px(q.1)), point(px(mid.0 - dy * 0.12), px(mid.1 + dx * 0.12)));
+                if let Ok(path) = path.build() {
+                    let alpha = if current { 0.9 } else { 0.32 };
+                    window.paint_path(path, theme::alpha(theme::teal(), alpha));
                 }
             }
         }
 
         // 星
         let lit: HashSet<usize> = f.lit.iter().copied().collect();
+        let read: HashSet<usize> = f.read.iter().copied().collect();
         // 引いても星が消えないよう、大きさはズームほどには縮めない
         let scale = cam.zoom.powf(0.55);
         let mut glows = 0;
@@ -346,17 +425,72 @@ pub fn paint(bounds: Bounds<Pixels>, f: &Frame<'_>, window: &mut Window, cx: &mu
                 circle(window, p, r + 0.8, theme::white().into());
                 continue;
             }
-            if figure {
-                if glows < 240 {
+            let in_focus = f
+                .focus_constellation
+                .is_none_or(|c| sky.star_constellation[i] as usize == c);
+            let was_read = read.contains(&i);
+            let mood = if in_focus { f.dim } else { f.dim * 0.3 };
+            let tint = |color: Hsla| -> Hsla {
+                let mut c = color;
+                c.a *= mood;
+                c
+            };
+            let base = match sky.kinds[i] {
+                StarKind::Code => theme::star_color(0.55 + 0.45 * s.brightness),
+                StarKind::Test => {
+                    let mut c: Hsla = theme::star_test().into();
+                    c.a = 0.72 + 0.28 * s.brightness;
+                    c
+                }
+                StarKind::Doc => {
+                    let mut c: Hsla = theme::star_doc().into();
+                    c.a = 0.72 + 0.28 * s.brightness;
+                    c
+                }
+            };
+            if was_read {
+                // 読み終えた星は、解析の間ずっと灯したままにする
+                glow(window, p, r * 0.8, r * 2.5 + 3.0, theme::alpha(theme::teal(), 0.45));
+                circle(window, p, r.max(1.4), theme::teal().into());
+            } else if figure {
+                if glows < 240 && in_focus {
                     glows += 1;
-                    let halo = theme::alpha(theme::violet(), 0.28 + 0.4 * s.brightness);
+                    let halo = theme::alpha(theme::violet(), (0.28 + 0.4 * s.brightness) * mood);
                     glow(window, p, r * 0.8, r * 3.0, halo);
                 }
-                circle(window, p, r, theme::star_color(0.55 + 0.45 * s.brightness));
+                circle(window, p, r, tint(base));
             } else {
-                let mut dust = theme::star_color(s.brightness * 0.6);
-                dust.a *= 0.62;
-                circle(window, p, r, dust);
+                let mut dust = base;
+                dust.a *= 0.46;
+                circle(window, p, r, tint(dust));
+            }
+        }
+
+        // 停留所の印。通過した場所には番号を添える
+        for star in f.upcoming {
+            let p = to_screen(f.positions[*star]);
+            if on_screen(p, 8.0) {
+                ring(window, p, 4.5, theme::alpha(theme::teal(), 0.45));
+            }
+        }
+        let current_stop = f.route.last().copied();
+        for (n, star) in f.route.iter().enumerate() {
+            let p = to_screen(f.positions[*star]);
+            if !on_screen(p, 8.0) {
+                continue;
+            }
+            if Some(*star) != current_stop {
+                ring(window, p, 5.5, theme::teal().into());
+                text(
+                    window,
+                    cx,
+                    (n + 1).to_string().into(),
+                    (p.0 - 15.0, p.1 - 7.0),
+                    10.5,
+                    theme::teal().into(),
+                    FontWeight::SEMIBOLD,
+                    false,
+                );
             }
         }
 
@@ -378,7 +512,11 @@ pub fn paint(bounds: Bounds<Pixels>, f: &Frame<'_>, window: &mut Window, cx: &mu
             let p = to_screen(f.positions[i]);
             let label = sky.labels[i].clone();
             let w = label.chars().map(|c| if c.is_ascii() { 7.0 } else { 12.0 }).sum::<f32>();
-            try_place(p.0 + 8.0, p.1 - 10.0, w + 12.0, 20.0);
+            // 重なるときは、選択中とカーソルの下だけを優先して出す
+            let priority = f.selected == Some(i) || f.hovered == Some(i);
+            if !try_place(p.0 + 8.0, p.1 - 10.0, w + 12.0, 20.0) && !priority {
+                continue;
+            }
             text(window, cx, label, (p.0 + 12.0, p.1 - 8.0), 12.0, theme::teal().into(), FontWeight::MEDIUM, false);
         }
 
@@ -399,7 +537,14 @@ pub fn paint(bounds: Bounds<Pixels>, f: &Frame<'_>, window: &mut Window, cx: &mu
             let share = (c.lines as f32 / biggest).sqrt();
             let size_px = 12.0 + share * 8.0;
             let center = to_screen(c.center);
-            let y = center.1 - c.extent * cam.zoom - size_px * 2.0;
+            let screen_radius = c.extent * cam.zoom;
+            // 遠景で出す名前の数を画面の広さで制限する。残りは近づくか、カーソルを乗せると出る
+            let budget = ((vp.0 * vp.1 / 42_000.0) as usize).max(6);
+            let focused = f.hovered_constellation == Some(ci) || f.focus_constellation == Some(ci);
+            if level == Lod::Far && position >= budget && !focused {
+                continue;
+            }
+            let y = center.1 - screen_radius - size_px * 1.5;
             // 全角を含むので、バイト数ではなく見た目の幅で見積もる
             let w: f32 = c
                 .name
@@ -415,8 +560,11 @@ pub fn paint(bounds: Bounds<Pixels>, f: &Frame<'_>, window: &mut Window, cx: &mu
             {
                 continue;
             }
-            let focused = f.hovered_constellation == Some(ci);
-            let strength = if focused { 1.0 } else { 0.62 + 0.38 * share };
+            let strength = if f.focus_constellation.is_some() && !focused {
+                0.35
+            } else {
+                0.8 + 0.2 * share
+            };
             let name_color = if focused {
                 theme::alpha(theme::teal(), lit_amount)
             } else {

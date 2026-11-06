@@ -1,5 +1,5 @@
 //! 設定と解析結果の保存。登録したリポジトリには何も書かない。
-use crate::model::{Analysis, DeepDive, Settings};
+use crate::model::{Analysis, DeepDive, Settings, SkyPreview};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use sha2::{Digest, Sha256};
@@ -61,6 +61,14 @@ impl Store {
         write_json(&self.repo_dir(repo).join("analysis.json"), analysis)
     }
 
+    pub fn load_preview(&self, repo: &Path) -> Option<SkyPreview> {
+        read_json(&self.repo_dir(repo).join("preview.json"))
+    }
+
+    pub fn save_preview(&self, repo: &Path, preview: &SkyPreview) -> io::Result<()> {
+        write_json(&self.repo_dir(repo).join("preview.json"), preview)
+    }
+
     fn deep_path(&self, repo: &Path, module_id: &str) -> PathBuf {
         self.repo_dir(repo).join("deep").join(format!("{}.json", hash(module_id)))
     }
@@ -105,6 +113,9 @@ mod tests {
         store.save_deep_dive(repo, &d).unwrap();
         assert_eq!(store.load_deep_dive(repo, "m/x").unwrap(), d);
         assert!(store.load_deep_dive(repo, "other").is_none());
+        let p = SkyPreview { stars: vec![(0.5, 0.5, 2.0, 1.0)], lines: vec![] };
+        store.save_preview(repo, &p).unwrap();
+        assert_eq!(store.load_preview(repo).unwrap(), p);
     }
 
     #[test]

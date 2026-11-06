@@ -1,5 +1,5 @@
 //! ファイル名のあいまい検索と全文検索。
-use crate::model::FileEntry;
+use crate::model::{FileEntry, Lang};
 use grep::regex::RegexMatcherBuilder;
 use grep::searcher::sinks::UTF8;
 use grep::searcher::{BinaryDetection, SearcherBuilder};
@@ -67,7 +67,11 @@ pub fn search_content(root: &Path, query: &str, limit: usize, cancel: &AtomicBoo
         .filter(|e| e.file_type().is_some_and(|t| t.is_file()))
         .map(|e| e.into_path())
         .collect();
-    paths.sort();
+    // 件数の上限に文書で達しないよう、コードから先に探す
+    paths.sort_by_key(|p| {
+        let is_code = Lang::from_path(&p.to_string_lossy()) != Lang::Other;
+        (!is_code, p.clone())
+    });
     for path in paths {
         if cancel.load(Ordering::Relaxed) || hits.len() >= limit {
             break;
@@ -95,7 +99,6 @@ pub fn search_content(root: &Path, query: &str, limit: usize, cancel: &AtomicBoo
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::Lang;
 
     fn f(p: &str) -> FileEntry {
         FileEntry { path: p.into(), lang: Lang::Other, lines: 0, bytes: 0, binary: false, churn: 0 }
@@ -126,6 +129,16 @@ mod tests {
         assert_eq!(search_content(dir.path(), "needle", 1, &cancel).len(), 1);
         cancel.store(true, Ordering::Relaxed);
         assert!(search_content(dir.path(), "needle", 10, &cancel).is_empty());
+    }
+
+    #[test]
+    fn code_comes_before_documents() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.md"), "needle\n").unwrap();
+        std::fs::write(dir.path().join("z.rs"), "needle\n").unwrap();
+        let hits = search_content(dir.path(), "needle", 10, &AtomicBool::new(false));
+        assert_eq!(hits[0].path, "z.rs");
+        assert_eq!(hits[1].path, "a.md");
     }
 
     #[test]

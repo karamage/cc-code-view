@@ -425,6 +425,20 @@ impl Render for CodeView {
             }
         };
 
+        // ツアーの範囲が属する関数を、シンボル一覧で示す
+        let active_symbol = self.band.and_then(|(start, _)| {
+            symbols.iter().rposition(|s| s.line < start)
+        });
+        let fade_top = gpui::linear_gradient(
+            180.,
+            gpui::linear_color_stop(theme::panel(), 0.),
+            gpui::linear_color_stop(theme::alpha(theme::panel(), 0.), 1.),
+        );
+        let fade_bottom = gpui::linear_gradient(
+            0.,
+            gpui::linear_color_stop(theme::panel(), 0.),
+            gpui::linear_color_stop(theme::alpha(theme::panel(), 0.), 1.),
+        );
         let crumbs: Vec<String> = path.split('/').map(str::to_string).collect();
         let crumb_count = crumbs.len();
 
@@ -473,7 +487,19 @@ impl Render for CodeView {
                     .flex()
                     .flex_row()
                     .relative()
-                    .child(div().flex_1().min_w_0().flex().flex_col().py(px(8.)).child(body))
+                    .child(
+                        div()
+                            .relative()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .child(body)
+                            .child(div().absolute().top_0().left_0().right_0().h(px(14.)).bg(fade_top))
+                            .child(
+                                div().absolute().bottom_0().left_0().right_0().h(px(18.)).bg(fade_bottom),
+                            ),
+                    )
                     .when(show_symbols, |d| {
                         d.child(
                             div()
@@ -487,8 +513,14 @@ impl Render for CodeView {
                                 .py(px(10.))
                                 .children(symbols.into_iter().enumerate().map(|(i, s)| {
                                     let line = s.line;
+                                    let active = active_symbol == Some(i);
                                     div()
                                         .id(("symbol", i))
+                                        .when(active, |d| {
+                                            d.bg(theme::alpha(theme::teal(), 0.12))
+                                                .border_l_2()
+                                                .border_color(theme::teal())
+                                        })
                                         .px(px(14.))
                                         .py(px(3.))
                                         .flex()

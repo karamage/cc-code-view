@@ -164,3 +164,11 @@ pub struct Settings {
     #[serde(default)]
     pub last_model: ModelChoice,
 }
+
+/// ホーム画面に出す、リポジトリの小さな星図。座標は 0.0〜1.0 に正規化する。
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct SkyPreview {
+    /// x, y, 半径, 明るさ
+    pub stars: Vec<(f32, f32, f32, f32)>,
+    pub lines: Vec<(u32, u32)>,
+}

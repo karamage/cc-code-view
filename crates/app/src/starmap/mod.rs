@@ -48,6 +48,10 @@ pub struct StarMap {
     selected: Option<usize>,
     lit: Vec<usize>,
     route: Vec<usize>,
+    upcoming: Vec<usize>,
+    read: Vec<usize>,
+    dim: f32,
+    focus_constellation: Option<usize>,
     viewport: Rc<Cell<Bounds<Pixels>>>,
     drag: Option<(f32, f32)>,
     dragged: bool,
@@ -84,6 +88,10 @@ impl StarMap {
             selected: None,
             lit: Vec::new(),
             route: Vec::new(),
+            upcoming: Vec::new(),
+            read: Vec::new(),
+            dim: 1.0,
+            focus_constellation: None,
             viewport: Rc::new(Cell::new(Bounds::default())),
             drag: None,
             dragged: false,
@@ -238,9 +246,31 @@ impl StarMap {
         cx.notify();
     }
 
-    pub fn set_route(&mut self, route: Vec<usize>, cx: &mut Context<Self>) {
+    pub fn set_route(&mut self, route: Vec<usize>, upcoming: Vec<usize>, cx: &mut Context<Self>) {
         self.route = route;
+        self.upcoming = upcoming;
         cx.notify();
+    }
+
+    pub fn set_read(&mut self, read: Vec<usize>, cx: &mut Context<Self>) {
+        if self.read != read {
+            self.read = read;
+            cx.notify();
+        }
+    }
+
+    pub fn set_dim(&mut self, dim: f32, cx: &mut Context<Self>) {
+        if self.dim != dim {
+            self.dim = dim;
+            cx.notify();
+        }
+    }
+
+    pub fn set_focus_constellation(&mut self, focus: Option<usize>, cx: &mut Context<Self>) {
+        if self.focus_constellation != focus {
+            self.focus_constellation = focus;
+            cx.notify();
+        }
     }
 
     fn local(&self, position: gpui::Point<Pixels>) -> (f32, f32) {
@@ -369,6 +399,10 @@ impl Render for StarMap {
         let selected = self.selected;
         let lit = self.lit.clone();
         let route = self.route.clone();
+        let upcoming = self.upcoming.clone();
+        let read = self.read.clone();
+        let dim = self.dim;
+        let focus_constellation = self.focus_constellation;
         let viewport = self.viewport.clone();
 
         div()
@@ -433,6 +467,10 @@ impl Render for StarMap {
                             lit: &lit,
                             selected,
                             route: &route,
+                            upcoming: &upcoming,
+                            read: &read,
+                            dim,
+                            focus_constellation,
                             reveal,
                         };
                         paint::paint(bounds, &frame, window, cx);

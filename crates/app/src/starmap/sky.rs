@@ -1,12 +1,36 @@
 //! インデックスとモジュール分割から、描画用のデータを作る。
 use ccv_core::grouping::assign_files;
 use ccv_core::layout::{Star, layout};
-use ccv_core::model::{Module, RepoIndex};
+use ccv_core::model::{Lang, Module, RepoIndex, SkyPreview};
 use gpui::SharedString;
 use std::collections::HashMap;
 
 /// 星座の形を作る星の数。全部をつなぐと毛玉になる。
 const FIGURE_STARS: usize = 10;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StarKind {
+    Code,
+    Test,
+    Doc,
+}
+
+/// 色分けのためにファイルを分類する。
+pub fn classify(path: &str, lang: Lang) -> StarKind {
+    let name = path.rsplit('/').next().unwrap_or(path);
+    let is_test = name.contains(".test.")
+        || name.contains(".spec.")
+        || name.contains("_test.")
+        || name.starts_with("test_")
+        || path.split('/').any(|seg| matches!(seg, "test" | "tests" | "__tests__" | "spec"));
+    if is_test {
+        StarKind::Test
+    } else if lang == Lang::Other {
+        StarKind::Doc
+    } else {
+        StarKind::Code
+    }
+}
 
 /// 全景で名前を出す価値のないファイル。
 fn is_noise(path: &str, binary: bool) -> bool {
@@ -73,6 +97,9 @@ pub struct Sky {
     pub figure: Vec<bool>,
     /// 名前を出す価値のある星
     pub labeled: Vec<bool>,
+    pub kinds: Vec<StarKind>,
+    /// 星ごとの星座の添字
+    pub star_constellation: Vec<u32>,
     pub bounds: (f32, f32, f32, f32),
 }
 
@@ -93,6 +120,7 @@ pub fn build_sky(index: &RepoIndex, modules: &[Module]) -> Sky {
     let mut figure_lines = Vec::new();
     let mut rank = vec![u32::MAX; stars.len()];
     let mut figure_flags = vec![false; stars.len()];
+    let mut star_constellation = vec![0u32; stars.len()];
     let labeled: Vec<bool> =
         index.files.iter().map(|f| !is_noise(&f.path, f.binary)).collect();
     let mut bounds = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
@@ -139,6 +167,9 @@ pub fn build_sky(index: &RepoIndex, modules: &[Module]) -> Sky {
             }
         }
         slot_to_constellation[slot] = constellations.len() as u32;
+        for i in list.iter() {
+            star_constellation[*i] = constellations.len() as u32;
+        }
         constellations.push(Constellation {
             name: modules.get(slot).map_or("未分類".into(), |m| m.name.clone().into()),
             center: (cx, cy),
@@ -187,7 +218,40 @@ pub fn build_sky(index: &RepoIndex, modules: &[Module]) -> Sky {
         })
         .collect();
 
-    Sky { stars, constellations, figure_lines, module_links, edges: index.edges.clone(), labels, rank, figure: figure_flags, labeled, bounds }
+    let kinds = index.files.iter().map(|f| classify(&f.path, f.lang)).collect();
+
+    Sky { stars, constellations, figure_lines, module_links, edges: index.edges.clone(), labels, rank, figure: figure_flags, labeled, kinds, star_constellation, bounds }
+}
+
+/// ホーム画面用に、星図を小さくまとめる。
+pub fn preview_of(sky: &Sky) -> SkyPreview {
+    const MAX_DUST: usize = 240;
+    let (min_x, min_y, max_x, max_y) = sky.bounds;
+    let span = (max_x - min_x).max(max_y - min_y).max(1.0);
+    let dust_total = sky.figure.iter().filter(|f| !**f).count().max(1);
+    let stride = (dust_total / MAX_DUST).max(1);
+    let mut index_of = vec![u32::MAX; sky.stars.len()];
+    let mut stars = Vec::new();
+    let mut dust_seen = 0;
+    for (i, s) in sky.stars.iter().enumerate() {
+        let keep = sky.figure[i] || {
+            dust_seen += 1;
+            dust_seen % stride == 0
+        };
+        if keep {
+            index_of[i] = stars.len() as u32;
+            let radius = if sky.figure[i] { s.radius } else { 0.0 };
+            let x = (s.x - min_x) / span;
+            let y = (s.y - min_y) / span;
+            stars.push((x, y, radius, s.brightness));
+        }
+    }
+    let lines = sky
+        .figure_lines
+        .iter()
+        .map(|(a, b)| (index_of[*a as usize], index_of[*b as usize]))
+        .collect();
+    SkyPreview { stars, lines }
 }
 
 #[cfg(test)]
@@ -239,6 +303,29 @@ mod tests {
         assert_eq!(sky.labeled, [true, true, false]);
         // 大きくても、ロックファイルは星座の主役にしない
         assert_eq!(sky.rank[2], 1);
+    }
+
+    #[test]
+    fn stars_are_classified_for_color() {
+        assert_eq!(classify("src/a.test.ts", Lang::TypeScript), StarKind::Test);
+        assert_eq!(classify("pkg/a_test.go", Lang::Go), StarKind::Test);
+        assert_eq!(classify("tests/x.rs", Lang::Rust), StarKind::Test);
+        assert_eq!(classify("README.md", Lang::Other), StarKind::Doc);
+        assert_eq!(classify("src/a.rs", Lang::Rust), StarKind::Code);
+        // 「latest」のような名前をテストと誤認しない
+        assert_eq!(classify("src/latest.rs", Lang::Rust), StarKind::Code);
+    }
+
+    #[test]
+    fn preview_is_normalized_and_lines_are_valid() {
+        let files: Vec<_> = (0..2000).map(|i| file(&format!("a{}/{i}.rs", i % 4), i + 1)).collect();
+        let index = RepoIndex { files, ..Default::default() };
+        let modules: Vec<_> = (0..4).map(|i| module(&format!("a{i}"))).collect();
+        let p = preview_of(&build_sky(&index, &modules));
+        assert!(p.stars.len() < 400);
+        assert!(p.stars.iter().all(|s| (0.0..=1.001).contains(&s.0) && (0.0..=1.001).contains(&s.1)));
+        assert!(p.lines.iter().all(|(a, b)| (*a as usize) < p.stars.len() && (*b as usize) < p.stars.len()));
+        assert!(!p.lines.is_empty());
     }
 
     #[test]
