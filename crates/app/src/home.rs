@@ -8,6 +8,7 @@ use gpui::{
     Window, canvas, div, prelude::*, px,
 };
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 pub enum HomeEvent {
     Open(PathBuf),
@@ -15,6 +16,8 @@ pub enum HomeEvent {
 
 pub struct Home {
     error: Option<SharedString>,
+    opened: Instant,
+    reduce_motion: bool,
 }
 
 impl EventEmitter<HomeEvent> for Home {}
@@ -33,8 +36,8 @@ pub fn validate_repo(path: &Path) -> Result<PathBuf, String> {
 }
 
 impl Home {
-    pub fn new() -> Home {
-        Home { error: None }
+    pub fn new(reduce_motion: bool) -> Home {
+        Home { error: None, opened: Instant::now(), reduce_motion }
     }
 
     fn add(&mut self, path: &Path, cx: &mut Context<Self>) {
@@ -101,7 +104,12 @@ fn status_line(analysis: Option<&Analysis>) -> String {
 }
 
 impl Render for Home {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let intro = if self.reduce_motion { 1.0 } else { self.opened.elapsed().as_secs_f32() / 2.2 };
+        if intro < 1.0 {
+            window.request_animation_frame();
+        }
+        let intro = intro.min(1.0);
         let state = cx.global::<AppState>();
         let store = state.store.clone();
         let repos = state.settings.repos.clone();
@@ -113,7 +121,6 @@ impl Render for Home {
             .size_full()
             .flex()
             .flex_col()
-            .items_center()
             .bg(theme::space())
             .text_color(theme::text())
             .on_drop(cx.listener(|this, paths: &ExternalPaths, _, cx| {
@@ -124,7 +131,10 @@ impl Render for Home {
             .child(
                 canvas(
                     |_, _, _| {},
-                    |bounds, _, window, _| crate::starmap::paint::paint_backdrop(bounds, window),
+                    move |bounds, _, window, _| {
+                        crate::starmap::paint::paint_backdrop(bounds, intro, window);
+                        crate::state::mark_first_paint();
+                    },
                 )
                 .absolute()
                 .size_full(),
@@ -143,7 +153,8 @@ impl Render for Home {
                 div()
                     .id("home-content")
                     .relative()
-                    .w(px(640.))
+                    .w(px(600.))
+                    .ml(px(88.))
                     .h_full()
                     .flex()
                     .flex_col()
@@ -243,8 +254,9 @@ impl Render for Home {
                             .id(("repo", i))
                             .group("repo")
                             .py(px(14.))
-                            .border_t_1()
-                            .border_color(theme::hairline())
+                            .px(px(12.))
+                            .mx(px(-12.))
+                            .rounded(px(8.))
                             .flex()
                             .items_center()
                             .gap(px(16.))

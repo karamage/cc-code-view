@@ -51,6 +51,19 @@ impl Buffer {
         self.starts.len()
     }
 
+    /// 横スクロールの幅を決めるために、最も長い行を返す。
+    pub fn longest_line(&self) -> usize {
+        (0..self.line_count()).max_by_key(|i| self.line(*i).len()).unwrap_or(0)
+    }
+
+    /// 両端を含む行範囲を、改行でつないで返す。
+    pub fn lines_text(&self, first: usize, last: usize) -> String {
+        (first..=last.min(self.line_count() - 1))
+            .map(|i| self.line(i))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
     pub fn line(&self, i: usize) -> &str {
         let start = self.starts[i] as usize;
         let end = self.starts.get(i + 1).map_or(self.text.len(), |n| *n as usize - 1);
@@ -82,6 +95,14 @@ mod tests {
         assert_eq!(b.line(0), "a");
         assert_eq!(b.line(2), "c");
         assert_eq!(b.kind(), BufferKind::Text);
+    }
+
+    #[test]
+    fn longest_line_and_ranges() {
+        let b = Buffer::from_bytes(b"a\nbbb\ncc".to_vec());
+        assert_eq!(b.longest_line(), 1);
+        assert_eq!(b.lines_text(1, 2), "bbb\ncc");
+        assert_eq!(b.lines_text(2, 99), "cc");
     }
 
     #[test]

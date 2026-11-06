@@ -2,6 +2,7 @@
 use crate::analysis::{AnalysisState, Ev, transition};
 use crate::args::DemoState;
 use crate::code::{CodeEvent, CodeView, icon_button};
+use crate::ja_text::paragraph;
 use crate::model_picker::model_picker;
 use crate::palette::{Palette, PaletteEvent, PaletteMode};
 use crate::starmap::sky::build_sky;
@@ -41,8 +42,12 @@ actions!(
         ZoomOut,
         FitAll,
         ToggleSymbols,
+        CopySelection,
     ]
 );
+
+const DEEP_WIDTH: f32 = 372.;
+const DEEP_TEXT_WIDTH: f32 = DEEP_WIDTH - 38.;
 
 pub enum WorkspaceEvent {
     GoHome,
@@ -212,6 +217,10 @@ impl Workspace {
         ];
         let file_at =
             index.files.iter().enumerate().map(|(i, f)| (f.path.clone(), i)).collect();
+        let side = analysis.is_some();
+        map.update(cx, |m, cx| {
+            m.set_insets((24.0, 24.0, 104.0, if side { 372.0 } else { 24.0 }), cx)
+        });
         self.loaded = Some(Loaded {
             index,
             file_at,
@@ -224,10 +233,21 @@ impl Workspace {
         cx.notify();
     }
 
+    /// 全景がパネルに隠れないよう、星図の余白を更新する。
+    fn update_insets(&self, cx: &mut Context<Self>) {
+        let Some(l) = &self.loaded else { return };
+        let side = l.analysis.is_some() && !self.code_open;
+        let insets = (24.0, 24.0, 104.0, if side { 372.0 } else { 24.0 });
+        l.map.update(cx, |m, cx| m.set_insets(insets, cx));
+    }
+
     fn close_code(&mut self, cx: &mut Context<Self>) {
         self.code_open = false;
         if let Some(l) = &self.loaded {
-            l.map.update(cx, |m, cx| m.set_selected(None, cx));
+            l.map.update(cx, |m, cx| {
+                m.set_selected(None, cx);
+                m.fit_all(cx);
+            });
         }
         cx.notify();
     }
@@ -574,6 +594,12 @@ impl Workspace {
         }
     }
 
+    fn on_copy(&mut self, _: &CopySelection, _: &mut Window, cx: &mut Context<Self>) {
+        if let Some(l) = &self.loaded {
+            l.code.update(cx, |c, cx| c.copy_selection(cx));
+        }
+    }
+
     fn with_map(&self, cx: &mut Context<Self>, f: impl FnOnce(&mut StarMap, &mut Context<StarMap>)) {
         if let Some(l) = &self.loaded {
             l.map.update(cx, f);
@@ -725,6 +751,7 @@ impl Workspace {
                 .border_1()
                 .border_color(theme::hairline_strong())
                 .shadow_lg()
+                .occlude()
                 .text_size(px(13.))
         };
         let primary = |id: &'static str, label: SharedString| {
@@ -871,10 +898,13 @@ impl Workspace {
         }
     }
 
-    fn render_tour_note(&mut self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+    fn render_tour_note(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
         let tour = self.tour.as_ref()?;
         let stop = tour.current()?.clone();
         let (position, total) = (tour.position(), tour.len());
+        // コードのペインの幅に合わせて折り返す
+        let pane = f32::from(window.viewport_size().width) * 0.62 - 44.0;
+        let body = paragraph(&stop.body, pane.min(720.0), 13.5, 23.0, theme::text(), window);
         Some(
             div()
                 .flex_none()
@@ -927,20 +957,12 @@ impl Workspace {
                             cx.listener(|this, _, _, cx| this.end_tour(cx)),
                         )),
                 )
-                .child(
-                    div()
-                        .mt(px(8.))
-                        .max_w(px(720.))
-                        .text_size(px(13.5))
-                        .line_height(px(23.))
-                        .text_color(theme::text())
-                        .child(stop.body),
-                )
+                .child(div().mt(px(8.)).child(body))
                 .into_any_element(),
         )
     }
 
-    fn render_deep(&mut self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+    fn render_deep(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
         let panel = self.deep.as_ref()?;
         let current = cx.global::<AppState>().settings.last_model;
         let body: gpui::AnyElement = match (&panel.dive, &panel.state) {
@@ -980,13 +1002,7 @@ impl Workspace {
                     .flex()
                     .flex_col()
                     .gap(px(12.))
-                    .child(
-                        div()
-                            .text_size(px(13.5))
-                            .line_height(px(23.))
-                            .text_color(theme::text())
-                            .child(dive.explanation.clone()),
-                    )
+                    .child(paragraph(&dive.explanation, DEEP_TEXT_WIDTH, 13.5, 23.0, theme::text(), window))
                     .child(
                         div()
                             .text_size(px(11.))
@@ -1009,14 +1025,14 @@ impl Workspace {
                                     .text_color(theme::teal())
                                     .child(k.path.clone()),
                             )
-                            .child(
-                                div()
-                                    .mt(px(2.))
-                                    .text_size(px(12.5))
-                                    .line_height(px(19.))
-                                    .text_color(theme::text_muted())
-                                    .child(k.why),
-                            )
+                            .child(div().mt(px(2.)).child(paragraph(
+                                &k.why,
+                                DEEP_TEXT_WIDTH,
+                                12.5,
+                                19.0,
+                                theme::text_muted(),
+                                window,
+                            )))
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.open_path(&path, 0, None, cx);
                             }))
@@ -1075,16 +1091,15 @@ impl Workspace {
                 .absolute()
                 .top(px(16.))
                 .left(px(16.))
-                .bottom(px(16.))
-                .w(px(340.))
+                .max_h(px(620.))
+                .w(px(DEEP_WIDTH))
                 .p(px(18.))
                 .overflow_y_scroll()
                 .rounded(px(12.))
                 .bg(theme::alpha(theme::panel_raised(), 0.96))
                 .border_1()
                 .border_color(theme::hairline_strong())
-                .on_mouse_up(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .occlude()
                 .child(
                     div()
                         .flex()
@@ -1113,21 +1128,21 @@ impl Workspace {
                         .child(format!("{} files · {} lines", panel.files, panel.lines)),
                 )
                 .when(!panel.summary.is_empty(), |d| {
-                    d.child(
-                        div()
-                            .mt(px(12.))
-                            .text_size(px(13.))
-                            .line_height(px(21.))
-                            .text_color(theme::text_muted())
-                            .child(panel.summary.clone()),
-                    )
+                    d.child(div().mt(px(12.)).child(paragraph(
+                        &panel.summary,
+                        DEEP_TEXT_WIDTH,
+                        13.,
+                        21.,
+                        theme::text_muted(),
+                        window,
+                    )))
                 })
                 .child(body)
                 .into_any_element(),
         )
     }
 
-    fn render_overview(&self) -> Option<gpui::AnyElement> {
+    fn render_overview(&self, window: &mut Window) -> Option<gpui::AnyElement> {
         if self.deep.is_some() || self.code_open {
             return None;
         }
@@ -1137,11 +1152,7 @@ impl Workspace {
                 .absolute()
                 .top(px(20.))
                 .left(px(22.))
-                .w(px(340.))
-                .text_size(px(13.5))
-                .line_height(px(23.))
-                .text_color(theme::text())
-                .child(analysis.overview.clone())
+                .child(paragraph(&analysis.overview, 330.0, 13.5, 23.0, theme::text(), window))
                 .into_any_element(),
         )
     }
@@ -1150,6 +1161,10 @@ impl Workspace {
         let l = self.loaded.as_ref()?;
         let sky = l.map.read(cx).sky().clone();
         let hovered = l.map.read(cx).hovered();
+        // コードを開いている間は星図が狭いので、説明は省く
+        if (self.code_open || self.deep.is_some()) && hovered.is_none() {
+            return None;
+        }
         let content = match hovered {
             Some(i) => {
                 let f = &l.index.files[i];
@@ -1170,6 +1185,9 @@ impl Workspace {
                 .absolute()
                 .bottom(px(16.))
                 .left(px(22.))
+                .right(px(22.))
+                .overflow_hidden()
+                .whitespace_nowrap()
                 .text_size(px(11.5))
                 .font_family(theme::CODE_FONT)
                 .text_color(if hovered.is_some() { theme::teal() } else { theme::text_muted() })
@@ -1181,7 +1199,11 @@ impl Workspace {
 
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        if self.loaded.is_some() && !self.demo_applied {
+        let laid_out = self.loaded.as_ref().is_some_and(|l| l.map.read(cx).is_laid_out());
+        if !laid_out && self.loaded.is_some() {
+            window.request_animation_frame();
+        }
+        if laid_out && !self.demo_applied {
             self.demo_applied = true;
             self.apply_demo(window, cx);
         }
@@ -1203,6 +1225,7 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::on_zoom_out))
             .on_action(cx.listener(Self::on_fit))
             .on_action(cx.listener(Self::on_toggle_symbols))
+            .on_action(cx.listener(Self::on_copy))
             .relative()
             .size_full()
             .flex()
@@ -1231,10 +1254,11 @@ impl Render for Workspace {
             );
         }
 
+        self.update_insets(cx);
         let dock = self.render_dock(cx);
-        let tour_note = self.render_tour_note(cx);
-        let deep = self.render_deep(cx);
-        let overview = self.render_overview();
+        let tour_note = self.render_tour_note(window, cx);
+        let deep = self.render_deep(window, cx);
+        let overview = self.render_overview(window);
         let stats = self.render_stats(cx);
         let touring = self.tour.is_some();
         let code_open = self.code_open;
@@ -1292,9 +1316,16 @@ impl Render for Workspace {
                     .inset_0()
                     .flex()
                     .justify_center()
+                    .items_start()
                     .pt(px(96.))
                     .bg(theme::alpha(theme::space(), 0.55))
-                    .child(palette),
+                    // 後ろの星図へ入力を通さない。外側を押すと閉じる
+                    .occlude()
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _, window, cx| this.close_palette(window, cx)),
+                    )
+                    .child(div().occlude().child(palette)),
             )
         })
     }

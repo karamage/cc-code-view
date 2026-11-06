@@ -82,7 +82,7 @@ pub fn analysis_prompt(repo: &Path, skeleton: &str, retry_note: Option<&str>) ->
 - modules: 役割ごとに 3〜12 個。id は短い英数字。name は日本語か、広く通じる英語の短い名前。summary は 1〜2 文。paths はリポジトリ相対のファイルかディレクトリで、主要なファイルをどれかに含める。\n\
 - tour: 入口から始まり、主要な処理の流れをたどる 6〜15 の停留所。path はリポジトリ相対。実際に開いて確認した行だけを指す。start_line と end_line は 1 始まりで、読むべき範囲を 40 行以内で示す。\n\
 - title は「関門」のように短く印象に残る名前にする。body は 2〜4 文で、なぜ重要かと次に何を読むかを書く。\n\
-- 文章はすべて日本語で書く。\n",
+- 文章はすべて日本語で書く。画面にそのまま表示するので、Markdown の記法やバッククォートを使わない。\n",
         repo = repo.display()
     );
     if let Some(note) = retry_note {

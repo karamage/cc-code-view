@@ -33,7 +33,6 @@ pub enum Ev {
     Start(ModelChoice),
     Activity(String),
     Finished,
-    Cancelled,
     Failed(RunError),
 }
 
@@ -48,7 +47,7 @@ pub fn transition(state: AnalysisState, event: Ev) -> AnalysisState {
         (Running { model, started, .. }, Ev::Activity(activity)) => {
             Running { model, activity, started }
         }
-        (Running { .. }, Ev::Finished | Ev::Cancelled) => Idle,
+        (Running { .. }, Ev::Finished) => Idle,
         (Running { .. }, Ev::Failed(e)) => match e {
             RunError::NotInstalled | RunError::Unsupported => Unavailable(e.to_string()),
             RunError::Cancelled => Idle,
@@ -69,8 +68,7 @@ mod tests {
         assert!(matches!(&running, AnalysisState::Running { model: ModelChoice::Opus, .. }));
         let running = transition(running, Ev::Activity("src/a.rs".into()));
         assert!(matches!(&running, AnalysisState::Running { activity, .. } if activity == "src/a.rs"));
-        assert_eq!(transition(running.clone(), Ev::Finished), idle);
-        assert_eq!(transition(running, Ev::Cancelled), idle);
+        assert_eq!(transition(running, Ev::Finished), idle);
     }
 
     #[test]

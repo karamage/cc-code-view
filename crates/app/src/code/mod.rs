@@ -62,6 +62,10 @@ pub struct CodeView {
     candidates: Vec<(String, u32)>,
     symbols_open: bool,
     load_generation: u64,
+    longest: usize,
+    /// 選択中の行範囲。始点と現在位置で、順序は問わない
+    selection: Option<(usize, usize)>,
+    selecting: bool,
 }
 
 impl EventEmitter<CodeEvent> for CodeView {}
@@ -117,11 +121,10 @@ impl CodeView {
             candidates: Vec::new(),
             symbols_open: true,
             load_generation: 0,
+            longest: 0,
+            selection: None,
+            selecting: false,
         }
-    }
-
-    pub fn path(&self) -> Option<&str> {
-        self.path.as_deref()
     }
 
     /// ファイルを開く。`line` は 0 始まり。`band` は強調する行範囲（1 始まり、両端を含む）。
@@ -145,6 +148,7 @@ impl CodeView {
             return;
         }
         self.path = Some(path.to_string());
+        self.selection = None;
         self.spans = Arc::new(Vec::new());
         self.load_generation += 1;
         let generation = self.load_generation;
@@ -177,6 +181,7 @@ impl CodeView {
                     if this.load_generation != generation {
                         return false;
                     }
+                    this.longest = buffer.longest_line();
                     this.content = Content::Ready(buffer);
                     this.scroll_to(line);
                     cx.notify();
@@ -219,6 +224,15 @@ impl CodeView {
         }
     }
 
+    /// 選択中の行をコピーする。選択がなければ何もしない。
+    pub fn copy_selection(&self, cx: &mut Context<Self>) {
+        let (Some((a, b)), Content::Ready(buffer)) = (self.selection, &self.content) else {
+            return;
+        };
+        let text = buffer.lines_text(a.min(b), a.max(b));
+        cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
+    }
+
     pub fn toggle_symbols(&mut self, cx: &mut Context<Self>) {
         self.symbols_open = !self.symbols_open;
         cx.notify();
@@ -254,6 +268,7 @@ impl CodeView {
         let Content::Ready(buffer) = &self.content else { return Vec::new() };
         let buffer = buffer.clone();
         let band = self.band;
+        let selection = self.selection;
         let spans = self.spans.clone();
         range
             .map(|i| {
@@ -275,33 +290,64 @@ impl CodeView {
                 let styled = StyledText::new(SharedString::from(text)).with_highlights(highlights);
                 let layout = styled.layout().clone();
                 let line_text: Arc<str> = raw.into();
+                let selected = selection.is_some_and(|(a, b)| i >= a.min(b) && i <= a.max(b));
                 div()
                     .id(i)
                     .h(px(LINE_HEIGHT))
                     .w_full()
                     .flex()
                     .flex_row()
+                    .cursor_text()
                     .when(in_band, |d| d.bg(theme::alpha(theme::violet(), 0.11)))
+                    .when(selected, |d| d.bg(theme::alpha(theme::teal(), 0.17)))
                     .child(
                         div()
                             .w(px(3.))
+                            .flex_none()
                             .h_full()
                             .when(in_band, |d| d.bg(theme::teal())),
                     )
                     .child(
                         div()
                             .w(px(58.))
+                            .flex_none()
                             .pr(px(16.))
                             .flex()
                             .justify_end()
                             .text_color(if in_band { theme::text() } else { theme::tok_comment() })
                             .child(number.to_string()),
                     )
-                    .child(div().flex_1().whitespace_nowrap().overflow_hidden().child(styled))
+                    .child(div().flex_none().whitespace_nowrap().pr(px(40.)).child(styled))
+                    .on_mouse_move(cx.listener(move |this, e: &gpui::MouseMoveEvent, _, cx| {
+                        if this.selecting && e.dragging() {
+                            if let Some((start, end)) = this.selection
+                                && end != i
+                            {
+                                this.selection = Some((start, i));
+                                cx.notify();
+                            }
+                        } else {
+                            this.selecting = false;
+                        }
+                    }))
+                    .on_mouse_up(
+                        MouseButton::Left,
+                        cx.listener(|this, _, _, cx| {
+                            this.selecting = false;
+                            // 1 行だけのクリックは選択にしない
+                            if this.selection.is_some_and(|(a, b)| a == b) {
+                                this.selection = None;
+                            }
+                            cx.notify();
+                        }),
+                    )
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(move |this, e: &MouseDownEvent, _, cx| {
                             if !e.modifiers.platform {
+                                this.selection = Some((i, i));
+                                this.selecting = true;
+                                cx.notify();
                                 return;
                             }
                             let byte = match layout.index_for_position(e.position) {
@@ -354,6 +400,8 @@ impl Render for CodeView {
                     cx.processor(|this, range: Range<usize>, _, cx| this.render_lines(range, cx)),
                 )
                 .track_scroll(self.scroll.clone())
+                .with_horizontal_sizing_behavior(gpui::ListHorizontalSizingBehavior::Unconstrained)
+                .with_width_from_item(Some(self.longest))
                 .flex_1()
                 .font_family(theme::CODE_FONT)
                 .text_size(px(13.))

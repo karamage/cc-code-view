@@ -52,6 +52,14 @@ pub struct StarMap {
     dragged: bool,
     needs_fit: bool,
     reduce_motion: bool,
+    /// 上右下左。パネルに隠れない範囲へ全景を収める
+    insets: (f32, f32, f32, f32),
+    /// 全景を見ている。余白が変わったら合わせ直す
+    at_overview: bool,
+    /// `CCV_FRAME_LOG` を付けたときだけ、フレーム間隔を出す
+    frame_log: Option<Instant>,
+    orbit: bool,
+    last_vp: (f32, f32),
 }
 
 impl EventEmitter<StarMapEvent> for StarMap {}
@@ -79,11 +87,21 @@ impl StarMap {
             dragged: false,
             needs_fit: true,
             reduce_motion,
+            insets: (24.0, 24.0, 96.0, 24.0),
+            at_overview: true,
+            frame_log: std::env::var_os("CCV_FRAME_LOG").map(|_| Instant::now()),
+            orbit: std::env::var_os("CCV_FRAME_ORBIT").is_some(),
+            last_vp: (0.0, 0.0),
         }
     }
 
     pub fn sky(&self) -> &Arc<Sky> {
         &self.sky
+    }
+
+    /// 一度でも配置されたか。カメラの計算には画面の大きさが要る。
+    pub fn is_laid_out(&self) -> bool {
+        !self.needs_fit
     }
 
     pub fn hovered(&self) -> Option<usize> {
@@ -116,8 +134,30 @@ impl StarMap {
     }
 
     fn fit_camera(&self) -> Camera {
+        let (w, h) = self.vp();
+        let (top, right, bottom, left) = self.insets;
+        let usable = ((w - left - right).max(120.0), (h - top - bottom).max(120.0));
+        let mut cam = Camera::fit(self.label_bounds(), usable, 1.6);
+        // 使える範囲の中心へ全景の中心を合わせる
+        cam.center.0 -= (left - right) / 2.0 / cam.zoom;
+        cam.center.1 -= (top - bottom) / 2.0 / cam.zoom;
+        cam
+    }
+
+    /// 星座名は星の外に出るので、その分を含めた範囲を返す。
+    fn label_bounds(&self) -> (f32, f32, f32, f32) {
         let (min_x, min_y, max_x, max_y) = self.sky.bounds;
-        Camera::fit((min_x, min_y, max_x, max_y), self.vp(), 1.6)
+        let margin = (max_x - min_x).max(max_y - min_y) * 0.05;
+        (min_x - margin, min_y - margin * 1.6, max_x + margin, max_y + margin)
+    }
+
+    pub fn set_insets(&mut self, insets: (f32, f32, f32, f32), cx: &mut Context<Self>) {
+        if self.insets != insets {
+            self.insets = insets;
+            if !self.needs_fit && self.at_overview {
+                self.fit_all(cx);
+            }
+        }
     }
 
     fn fly(&mut self, to: Camera, cx: &mut Context<Self>) {
@@ -132,24 +172,30 @@ impl StarMap {
     }
 
     pub fn fit_all(&mut self, cx: &mut Context<Self>) {
+        self.at_overview = true;
         let to = self.fit_camera();
         self.fly(to, cx);
     }
 
     pub fn fly_to_file(&mut self, file: usize, cx: &mut Context<Self>) {
         let Some(s) = self.sky.stars.get(file) else { return };
-        let to = Camera { center: (s.x, s.y), zoom: self.camera.zoom.clamp(1.8, 3.2) };
+        self.at_overview = false;
+        let to = Camera { center: (s.x, s.y), zoom: self.camera.zoom.clamp(1.1, 2.0) };
         self.fly(to, cx);
     }
 
     pub fn fly_to_constellation(&mut self, index: usize, cx: &mut Context<Self>) {
         let Some(c) = self.sky.constellations.get(index) else { return };
         let (w, h) = self.vp();
-        let zoom = (w.min(h) / (c.extent * 2.0 + 160.0)).clamp(0.3, 3.0);
-        self.fly(Camera { center: c.center, zoom }, cx);
+        let zoom = ((w.min(h) * 0.7) / (c.extent * 2.0 + 120.0)).clamp(0.6, 3.5);
+        self.at_overview = false;
+        // 左のパネルに隠れないよう、右へ寄せて映す
+        let center = (c.center.0 - 180.0 / zoom, c.center.1);
+        self.fly(Camera { center, zoom }, cx);
     }
 
     pub fn zoom_step(&mut self, factor: f32, cx: &mut Context<Self>) {
+        self.at_overview = false;
         let mut to = self.flight.as_ref().map_or(self.camera, |f| f.to);
         to.zoom = (to.zoom * factor).clamp(camera::MIN_ZOOM, MAX_ZOOM);
         let ms = if self.reduce_motion { 0 } else { 180 };
@@ -188,6 +234,7 @@ impl StarMap {
             ScrollDelta::Lines(l) => (l.x * 20.0, l.y * 20.0),
         };
         self.flight = None;
+        self.at_overview = false;
         let vp = self.vp();
         if e.modifiers.platform || e.modifiers.control {
             let cursor = self.local(e.position);
@@ -218,6 +265,27 @@ impl Render for StarMap {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let now = Instant::now();
         let mut animating = false;
+        if let Some(last) = self.frame_log.as_mut() {
+            eprintln!("CCV_FRAME {:.2}", now.duration_since(*last).as_secs_f32() * 1000.0);
+            *last = now;
+            // 計測中は動かし続ける
+            window.request_animation_frame();
+            if self.orbit {
+                self.flight = None;
+                self.camera.zoom = (self.camera.zoom * 1.002).min(camera::MAX_ZOOM);
+                self.camera.pan((0.6, 0.3));
+            }
+        }
+
+        // ペインの幅が変わったら、全景を合わせ直す
+        let vp = self.vp();
+        if vp != self.last_vp {
+            self.last_vp = vp;
+            if self.at_overview && !self.needs_fit {
+                let to = self.fit_camera();
+                self.fly(to, cx);
+            }
+        }
 
         if self.needs_fit && f32::from(self.viewport.get().size.width) > 1.0 {
             self.camera = self.fit_camera();
@@ -316,6 +384,7 @@ impl Render for StarMap {
                     }
                     this.drag = Some(now);
                     this.flight = None;
+                    this.at_overview = false;
                     this.camera.pan(delta);
                     cx.notify();
                     return;

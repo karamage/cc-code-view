@@ -6,7 +6,8 @@ use ccv_core::model::{ModelChoice, RepoEntry, Settings};
 use ccv_core::store::Store;
 use gpui::{App, Global};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Once, OnceLock};
+use std::time::Instant;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum ClaudeStatus {
@@ -98,6 +99,22 @@ pub fn check_claude(cx: &mut App) {
         });
     })
     .detach();
+}
+
+static START: OnceLock<Instant> = OnceLock::new();
+static FIRST_PAINT: Once = Once::new();
+
+pub fn mark_start() {
+    START.get_or_init(Instant::now);
+}
+
+/// 最初の描画で起動時間を出す。性能の実測に使う。
+pub fn mark_first_paint() {
+    FIRST_PAINT.call_once(|| {
+        if let Some(start) = START.get() {
+            eprintln!("CCV_READY {}", start.elapsed().as_millis());
+        }
+    });
 }
 
 /// 「視差効果を減らす」の設定を読む。

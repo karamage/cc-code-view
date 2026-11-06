@@ -12,6 +12,7 @@ pub fn model_picker(
     let on_pick = Rc::new(on_pick);
     div()
         .flex()
+        .flex_wrap()
         .items_center()
         .gap(px(2.))
         .p(px(2.))

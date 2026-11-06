@@ -19,6 +19,14 @@ pub const DEEP_DIVE_SCHEMA: &str = r#"{"type":"object","additionalProperties":fa
 #[derive(Debug, PartialEq)]
 pub struct InvalidOutput(pub String);
 
+/// AI の文章は書式なしで表示するので、Markdown の記号を取り除く。
+fn plain(text: &str) -> String {
+    let mut out = text.replace("**", "").replace('`', "");
+    let trimmed: Vec<&str> = out.lines().map(|l| l.trim_start_matches(['#', ' '])).collect();
+    out = trimmed.join("\n");
+    out.trim().to_string()
+}
+
 fn is_safe_relative(path: &str) -> bool {
     !path.is_empty()
         && Path::new(path).components().all(|c| matches!(c, Component::Normal(_) | Component::CurDir))
@@ -70,6 +78,8 @@ pub fn validate_analysis(
                 .map(|p| clean_path(p))
                 .filter(|p| path_exists(p))
                 .collect();
+            m.name = plain(&m.name);
+            m.summary = plain(&m.summary);
             (!m.paths.is_empty()).then_some(m)
         })
         .collect();
@@ -90,8 +100,8 @@ pub fn validate_analysis(
                 return None;
             }
             Some(TourStop {
-                title: s.title,
-                body: s.body,
+                title: plain(&s.title),
+                body: plain(&s.body),
                 path,
                 start_line: s.start_line as u32,
                 end_line: (s.end_line.min(total as i64)) as u32,
@@ -99,7 +109,7 @@ pub fn validate_analysis(
         })
         .collect();
 
-    Ok(Analysis { head: index.head.clone(), model, overview: parsed.overview, modules, tour })
+    Ok(Analysis { head: index.head.clone(), model, overview: plain(&parsed.overview), modules, tour })
 }
 
 #[derive(Deserialize)]
@@ -123,14 +133,14 @@ pub fn validate_deep_dive(
         .key_files
         .into_iter()
         .filter(|k| is_safe_relative(&k.path))
-        .map(|k| KeyFile { path: clean_path(&k.path), why: k.why })
+        .map(|k| KeyFile { path: clean_path(&k.path), why: plain(&k.why) })
         .filter(|k| index.files.iter().any(|f| f.path == k.path))
         .collect();
     Ok(DeepDive {
         module_id: module_id.to_string(),
         head: index.head.clone(),
         model,
-        explanation: parsed.explanation,
+        explanation: plain(&parsed.explanation),
         key_files,
     })
 }
@@ -191,6 +201,11 @@ mod tests {
         assert_eq!(d.key_files.len(), 1);
         assert_eq!(d.module_id, "m");
         assert!(validate_deep_dive(&json!({"explanation":" ","key_files":[]}), &index(), "m", ModelChoice::Opus).is_err());
+    }
+
+    #[test]
+    fn markdown_is_removed_from_ai_text() {
+        assert_eq!(plain("## 見出し\n`claude -p` と **gh**"), "見出し\nclaude -p と gh");
     }
 
     #[test]

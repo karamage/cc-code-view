@@ -109,7 +109,9 @@ pub fn build_sky(index: &RepoIndex, modules: &[Module]) -> Sky {
     }
     let mut module_links: Vec<(u32, u32, u32)> =
         link_counts.into_iter().map(|((a, b), n)| (a, b, n)).collect();
-    module_links.sort_unstable();
+    // 全部を描くと毛玉になる。太い順に、星座の数の 3 倍までに絞る
+    module_links.sort_by_key(|l| (std::cmp::Reverse(l.2), l.0, l.1));
+    module_links.truncate(constellations.len() * 3);
 
     let labels = index
         .files
@@ -149,6 +151,25 @@ mod tests {
         assert_eq!(sky.module_links, [(0, 1, 2)]);
         assert_eq!(sky.figure_lines.len(), 1);
         assert_eq!(sky.rank[1], 0);
+    }
+
+    #[test]
+    fn only_the_strongest_links_are_kept() {
+        let files: Vec<_> = (0..8).map(|i| file(&format!("m{i}/f.rs"), 1)).collect();
+        let mut edges = Vec::new();
+        for a in 0..8u32 {
+            for b in 0..8u32 {
+                if a != b {
+                    edges.push((a, b));
+                }
+            }
+        }
+        edges.extend([(0, 1); 5]);
+        let modules: Vec<_> = (0..8).map(|i| module(&format!("m{i}"))).collect();
+        let index = RepoIndex { files, edges, ..Default::default() };
+        let sky = build_sky(&index, &modules);
+        assert_eq!(sky.module_links.len(), 24);
+        assert_eq!(sky.module_links[0], (0, 1, 7));
     }
 
     #[test]

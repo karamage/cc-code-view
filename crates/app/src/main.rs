@@ -2,6 +2,7 @@ mod analysis;
 mod args;
 mod code;
 mod home;
+mod ja_text;
 mod model_picker;
 mod palette;
 mod starmap;
@@ -44,7 +45,8 @@ struct Root {
 
 impl Root {
     fn show_home(&mut self, cx: &mut Context<Self>) {
-        let home = cx.new(|_| Home::new());
+        let reduce_motion = cx.global::<AppState>().reduce_motion;
+        let home = cx.new(|_| Home::new(reduce_motion));
         self._subscription =
             Some(cx.subscribe(&home, |this, _, e: &HomeEvent, cx| match e {
                 HomeEvent::Open(path) => this.show_repo(path.clone(), cx),
@@ -100,6 +102,7 @@ fn bind_keys(cx: &mut App) {
         KeyBinding::new("cmd--", ZoomOut, w),
         KeyBinding::new("cmd-0", FitAll, w),
         KeyBinding::new("cmd-shift-l", ToggleSymbols, w),
+        KeyBinding::new("cmd-c", CopySelection, w),
         KeyBinding::new("down", palette::SelectNext, Some("Palette")),
         KeyBinding::new("up", palette::SelectPrev, Some("Palette")),
         KeyBinding::new("enter", palette::Confirm, Some("Palette")),
@@ -148,6 +151,7 @@ fn analyze_headless(repo: PathBuf, model: ModelChoice, store: &Store) -> i32 {
 }
 
 fn main() {
+    state::mark_start();
     let args = parse_args(std::env::args().skip(1));
     let root_dir = args.data_dir.clone().unwrap_or_else(Store::default_root);
     let store = Arc::new(Store::new(root_dir));
@@ -202,7 +206,8 @@ fn main() {
             },
             |_, cx| {
                 cx.new(|cx| {
-                    let home = cx.new(|_| Home::new());
+                    let reduce_motion = cx.global::<AppState>().reduce_motion;
+                    let home = cx.new(|_| Home::new(reduce_motion));
                     let mut root = Root { screen: Screen::Home(home), _subscription: None };
                     match open_repo {
                         Some(path) => root.show_repo(path, cx),
@@ -214,6 +219,5 @@ fn main() {
         )
         .expect("ウィンドウを開けませんでした");
         cx.activate(true);
-        eprintln!("CCV_READY");
     });
 }

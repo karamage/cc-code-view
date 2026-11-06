@@ -2,18 +2,21 @@
 use crate::model::{FileEntry, Module};
 use std::collections::BTreeMap;
 
-const SPLIT_ABOVE: usize = 60;
+const MIN_SPLIT_ABOVE: usize = 60;
+/// 星座がこれより増えると全景が読めなくなる。大きなリポジトリほど粗く分ける
+const TARGET_MODULES: usize = 24;
 const ROOT_NAME: &str = "(root)";
 
 pub fn provisional_modules(files: &[FileEntry]) -> Vec<Module> {
     let mut out = Vec::new();
     let paths: Vec<&str> = files.iter().map(|f| f.path.as_str()).collect();
-    split("", &paths, &mut out);
+    let split_above = MIN_SPLIT_ABOVE.max(paths.len() / TARGET_MODULES);
+    split("", &paths, split_above, &mut out);
     out.sort_by(|a, b| a.name.cmp(&b.name));
     out
 }
 
-fn split(prefix: &str, paths: &[&str], out: &mut Vec<Module>) {
+fn split(prefix: &str, paths: &[&str], split_above: usize, out: &mut Vec<Module>) {
     let mut children: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
     let mut direct: Vec<&str> = Vec::new();
     for p in paths {
@@ -29,8 +32,8 @@ fn split(prefix: &str, paths: &[&str], out: &mut Vec<Module>) {
     }
     for (dir, items) in children {
         let child = format!("{prefix}{dir}");
-        if items.len() > SPLIT_ABOVE && items.iter().any(|p| p[child.len() + 1..].contains('/')) {
-            split(&format!("{child}/"), &items, out);
+        if items.len() > split_above && items.iter().any(|p| p[child.len() + 1..].contains('/')) {
+            split(&format!("{child}/"), &items, split_above, out);
         } else {
             out.push(module(&child, vec![child.clone()]));
         }
@@ -90,6 +93,15 @@ mod tests {
         }
         let modules = provisional_modules(&files);
         assert!(assign_files(&files, &modules).iter().all(|m| *m < modules.len()));
+    }
+
+    #[test]
+    fn large_repositories_keep_a_readable_number_of_constellations() {
+        let files: Vec<_> =
+            (0..12_000).map(|i| file(&format!("pkg{}/mod{}/f{i}.ts", i % 40, i % 400))).collect();
+        let count = provisional_modules(&files).len();
+        assert!(count <= 48, "{count}");
+        assert!(count >= 12, "{count}");
     }
 
     fn m(p: &str) -> Module {

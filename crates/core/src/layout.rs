@@ -2,7 +2,9 @@
 use crate::model::FileEntry;
 
 const GOLDEN: f32 = 2.399_963;
-const MODULE_GAP: f32 = 40.0;
+const MODULE_GAP: f32 = 30.0;
+/// ウィンドウは横長なので、星座の並びも横へ広げる
+const WIDE: f32 = 1.5;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Star {
@@ -66,7 +68,7 @@ pub fn layout(files: &[FileEntry], assignment: &[usize], module_count: usize) ->
         }
         let mean: f32 =
             list.iter().map(|i| star_radius(files[*i].lines)).sum::<f32>() / list.len() as f32;
-        let spacing = mean.max(1.4) * 3.2;
+        let spacing = mean.max(1.4) * 4.4;
         let mut extent = 0.0f32;
         for (k, i) in list.iter().enumerate() {
             let (mut x, mut y) = phyllotaxis(k, spacing);
@@ -115,7 +117,7 @@ pub fn layout(files: &[FileEntry], assignment: &[usize], module_count: usize) ->
         centers[mi] = center;
     }
     for s in &mut stars {
-        s.x += centers[s.module].0;
+        s.x += centers[s.module].0 * WIDE;
         s.y += centers[s.module].1;
     }
     stars

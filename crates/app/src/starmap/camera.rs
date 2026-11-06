@@ -60,7 +60,7 @@ impl Camera {
     /// `bounds` (min_x, min_y, max_x, max_y) がビューポートに収まるカメラ。
     pub fn fit(bounds: (f32, f32, f32, f32), vp: (f32, f32), max_zoom: f32) -> Camera {
         let (w, h) = ((bounds.2 - bounds.0).max(1.0), (bounds.3 - bounds.1).max(1.0));
-        let zoom = (vp.0 / w).min(vp.1 / h) * 0.86;
+        let zoom = (vp.0 / w).min(vp.1 / h) * 0.96;
         Camera {
             center: ((bounds.0 + bounds.2) / 2.0, (bounds.1 + bounds.3) / 2.0),
             zoom: zoom.clamp(MIN_ZOOM, max_zoom),
