@@ -16,7 +16,8 @@ use ccv_core::grouping::provisional_modules;
 use ccv_core::index::build_index;
 use ccv_core::model::{Analysis, DeepDive, ModelChoice, Module, RepoIndex};
 use gpui::{
-    Context, Entity, EventEmitter, FocusHandle, Focusable, FontWeight, MouseButton, Render,
+    AnimationExt, Context, Entity, EventEmitter, FocusHandle, Focusable, FontWeight, MouseButton,
+    Render,
     SharedString, Subscription, Window, actions, div, prelude::*, px,
 };
 use std::collections::HashMap;
@@ -275,6 +276,25 @@ impl Workspace {
             .flatten();
         let focus = self.deep.as_ref().map(|d| d.constellation).or(reading);
         let minimap = self.code_open;
+        // ツアーを始める前から、全景で読む順番を見せる
+        if self.tour.is_none() {
+            let preview: Vec<usize> = if self.code_open || self.deep.is_some() {
+                Vec::new()
+            } else {
+                l.analysis.as_ref().map_or(Vec::new(), |a| {
+                    let mut stops: Vec<usize> = Vec::new();
+                    for s in &a.tour {
+                        if let Some(i) = l.file_at.get(&s.path)
+                            && stops.last() != Some(i)
+                        {
+                            stops.push(*i);
+                        }
+                    }
+                    stops
+                })
+            };
+            l.map.update(cx, |m, cx| m.set_route(Vec::new(), preview, cx));
+        }
         let read = if matches!(self.state, AnalysisState::Running { .. }) {
             self.read_stars.clone()
         } else {
@@ -381,7 +401,10 @@ impl Workspace {
                         panel.state = DeepState::Idle;
                     }
                     Err(RunError::Cancelled) => panel.state = DeepState::Idle,
-                    Err(e) => panel.state = DeepState::Failed(e.to_string()),
+                    Err(e) => {
+                        eprintln!("解説の生成に失敗しました: {e}");
+                        panel.state = DeepState::Failed(e.to_string());
+                    }
                 }
             },
         );
@@ -1085,6 +1108,7 @@ impl Workspace {
         let tour = self.tour.as_ref()?;
         let stop = tour.current()?.clone();
         let (position, total) = (tour.position(), tour.len());
+        let reduce_motion = cx.global::<AppState>().reduce_motion;
         // コードのペインの幅に合わせて折り返す
         let pane = f32::from(window.viewport_size().width) * 0.62 - 44.0;
         let body = paragraph(&stop.body, pane.min(720.0), 13.5, 23.0, theme::text(), window);
@@ -1140,7 +1164,17 @@ impl Workspace {
                             cx.listener(|this, _, _, cx| this.end_tour(cx)),
                         )),
                 )
-                .child(div().mt(px(8.)).child(body))
+                .child(div().mt(px(8.)).child(body.with_animation(
+                    // 停留所ごとに識別子を変えて、移動のたびに解説を灯し直す
+                    gpui::ElementId::NamedInteger("tour-note".into(), position as u64),
+                    gpui::Animation::new(Duration::from_millis(if reduce_motion {
+                        theme::REDUCED_MS
+                    } else {
+                        theme::TRANSITION_MS
+                    }))
+                    .with_easing(gpui::ease_in_out),
+                    |d, t| d.opacity(t),
+                )))
                 .into_any_element(),
         )
     }
@@ -1344,7 +1378,8 @@ impl Workspace {
             .into_iter()
             .map(|ci| {
                 let c = &sky.constellations[ci];
-                let share = (c.lines as f32 / biggest).sqrt();
+                // 実際の比が分かるよう、棒は線形にする
+                let share = c.lines as f32 / biggest;
                 div()
                     .id(("constellation-row", ci))
                     .h(px(26.))
@@ -1631,7 +1666,7 @@ impl Render for Workspace {
                     .justify_center()
                     .items_start()
                     .pt(px(96.))
-                    .bg(theme::alpha(theme::space(), 0.34))
+                    .bg(theme::alpha(theme::space(), 0.62))
                     // 後ろの星図へ入力を通さない。外側を押すと閉じる
                     .occlude()
                     .on_mouse_down(

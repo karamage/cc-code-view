@@ -29,8 +29,9 @@ pub fn model_picker(
                 .rounded(px(6.))
                 .cursor_pointer()
                 .text_size(px(12.))
-                .text_color(if selected { theme::space() } else { theme::text_muted() })
-                .when(selected, |d| d.bg(theme::violet()))
+                // 実行ボタンと競わないよう、選択は中立の色で示す
+                .text_color(if selected { theme::white() } else { theme::text_muted() })
+                .when(selected, |d| d.bg(theme::alpha(theme::white(), 0.17)))
                 .when(!selected, |d| {
                     d.hover(|h| h.bg(theme::alpha(theme::white(), 0.07)).text_color(theme::text()))
                 })

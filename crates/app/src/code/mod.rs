@@ -465,6 +465,12 @@ impl Render for CodeView {
                     .border_color(theme::hairline())
                     .text_size(px(12.))
                     .font_family(theme::CODE_FONT)
+                    .child(icon_button("nav-back", "←").on_click(cx.listener(|this, _, _, cx| {
+                        this.back(cx);
+                    })))
+                    .child(icon_button("nav-forward", "→").on_click(cx.listener(|this, _, _, cx| {
+                        this.forward(cx);
+                    })))
                     .children(crumbs.into_iter().enumerate().map(|(i, c)| {
                         let last = i + 1 == crumb_count;
                         div()
@@ -548,7 +554,7 @@ impl Render for CodeView {
                                                 .overflow_hidden()
                                                 .whitespace_nowrap()
                                                 .text_color(theme::tok_plain())
-                                                .child(s.name),
+                                                .child(crate::palette::middle_ellipsis(&s.name, 17)),
                                         )
                                         .on_click(cx.listener(move |this, _, _, cx| {
                                             let path = this.path.clone().unwrap_or_default();

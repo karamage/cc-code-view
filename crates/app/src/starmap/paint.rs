@@ -479,6 +479,25 @@ pub fn paint(bounds: Bounds<Pixels>, f: &Frame<'_>, window: &mut Window, cx: &mu
             }
         }
 
+        // これから通る航路を淡く描く。全景で読む順番が見えるように
+        if f.route.is_empty() && f.upcoming.len() > 1 {
+            let mut path = PathBuilder::stroke(px(1.0));
+            let mut started = false;
+            for pair in f.upcoming.windows(2) {
+                let (p, q) = (to_screen(f.positions[pair[0]]), to_screen(f.positions[pair[1]]));
+                let mid = ((p.0 + q.0) / 2.0, (p.1 + q.1) / 2.0);
+                let (dx, dy) = (q.0 - p.0, q.1 - p.1);
+                if !started {
+                    path.move_to(point(px(p.0), px(p.1)));
+                    started = true;
+                }
+                path.curve_to(point(px(q.0), px(q.1)), point(px(mid.0 - dy * 0.12), px(mid.1 + dx * 0.12)));
+            }
+            if let Ok(path) = path.build() {
+                window.paint_path(path, theme::alpha(theme::teal(), 0.5));
+            }
+        }
+
         // ツアーの航路。古い区間は細く薄くし、直近の移動だけを際立たせる
         if f.route.len() > 1 {
             let last = f.route.len() - 2;
@@ -501,9 +520,21 @@ pub fn paint(bounds: Bounds<Pixels>, f: &Frame<'_>, window: &mut Window, cx: &mu
         let lit: HashSet<usize> = f.lit.iter().copied().collect();
         let read: HashSet<usize> = f.read.iter().copied().collect();
         let mut glows = 0;
+        // 引きで見える塵は 1 画素に満たない。描く数を間引いて、描画の負荷を一定に保つ
+        const MAX_DUST: usize = 2500;
+        let dust_stride = if level == Lod::Near { 1 } else { (sky.stars.len() / MAX_DUST).max(1) };
         for (i, s) in sky.stars.iter().enumerate() {
-            let p = to_screen(f.positions[i]);
             let figure = sky.figure[i];
+            if !figure
+                && i % dust_stride != 0
+                && !lit.contains(&i)
+                && !read.contains(&i)
+                && f.selected != Some(i)
+                && f.hovered != Some(i)
+            {
+                continue;
+            }
+            let p = to_screen(f.positions[i]);
             // 形を作る星を主役にし、ほかは背景の塵にする
             let r = star_screen_radius(s.radius, figure, cam.zoom);
             if !on_screen(p, r + 24.0) {
@@ -544,7 +575,7 @@ pub fn paint(bounds: Bounds<Pixels>, f: &Frame<'_>, window: &mut Window, cx: &mu
                 glow(window, p, r.max(2.4), 9.0, theme::alpha(theme::teal(), 0.6));
                 circle(window, p, r.max(2.4), theme::teal().into());
             } else if figure {
-                if glows < 240 && in_focus {
+                if glows < 140 && in_focus {
                     glows += 1;
                     let halo = theme::alpha(theme::violet(), (0.28 + 0.4 * s.brightness) * mood);
                     glow(window, p, r * 0.8, r * 3.0, halo);
@@ -561,14 +592,14 @@ pub fn paint(bounds: Bounds<Pixels>, f: &Frame<'_>, window: &mut Window, cx: &mu
         for (k, star) in f.upcoming.iter().enumerate() {
             let p = to_screen(f.positions[*star]);
             if on_screen(p, 8.0) {
-                let color = theme::alpha(theme::teal(), 0.55);
-                ring(window, p, 4.5, color);
+                let color = theme::alpha(theme::teal(), 0.8);
+                ring(window, p, 5.5, color);
                 text(
                     window,
                     cx,
                     (f.route.len() + k + 1).to_string().into(),
-                    (p.0 - 15.0, p.1 - 7.0),
-                    10.0,
+                    (p.0 - 19.0, p.1 - 8.0),
+                    12.0,
                     color,
                     FontWeight::NORMAL,
                     false,
@@ -582,13 +613,13 @@ pub fn paint(bounds: Bounds<Pixels>, f: &Frame<'_>, window: &mut Window, cx: &mu
                 continue;
             }
             if Some(*star) != current_stop {
-                ring(window, p, 5.5, theme::teal().into());
+                ring(window, p, 6.5, theme::teal().into());
                 text(
                     window,
                     cx,
                     (n + 1).to_string().into(),
-                    (p.0 - 15.0, p.1 - 7.0),
-                    10.5,
+                    (p.0 - 20.0, p.1 - 8.0),
+                    12.0,
                     theme::teal().into(),
                     FontWeight::SEMIBOLD,
                     false,
@@ -721,7 +752,7 @@ pub fn paint(bounds: Bounds<Pixels>, f: &Frame<'_>, window: &mut Window, cx: &mu
             candidates.sort_by_key(|i| sky.rank[*i]);
             let mut drawn = 0;
             for i in candidates {
-                if drawn > 120 {
+                if drawn >= 70 {
                     break;
                 }
                 let s = sky.stars[i];

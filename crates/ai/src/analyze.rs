@@ -1,5 +1,6 @@
 //! 解析の実行。出力が不正なときだけ 1 回再試行する。
 use crate::command::claude_args;
+use crate::preflight::with_resolved_path;
 use crate::prompt::{analysis_prompt, deep_dive_prompt, skeleton};
 use crate::runner::{ClaudeConfig, RunError, RunEvent, run_claude};
 use crate::schema::{
@@ -26,6 +27,7 @@ fn with_retry<T>(
     prompt: impl Fn(Option<&str>) -> String,
     validate: impl Fn(&Value) -> Result<T, InvalidOutput>,
 ) -> Result<T, RunError> {
+    let cfg = &with_resolved_path(cfg.clone());
     let mut note: Option<String> = None;
     loop {
         let args = claude_args(&prompt(note.as_deref()), schema, repo, model);

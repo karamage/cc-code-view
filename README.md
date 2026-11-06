@@ -6,6 +6,10 @@
 手元の Claude Code（`claude -p`）が星座に名前を付け、読む順番をガイドツアーにまとめます。
 Rust と [gpui](https://github.com/zed-industries/zed/tree/main/crates/gpui) で作っています。
 
+![全景。AI が名付けた星座、読む順番の航路、星座の一覧](docs/images/overview.png)
+
+![ガイドツアー。星図、コード、解説が同期する](docs/images/tour.png)
+
 > Anthropic とは関係のない個人のプロジェクトです。Claude は Anthropic, PBC の商標です。
 
 ## できること
@@ -39,7 +43,7 @@ Rust stable を使います。gpui の `runtime_shaders` 機能を使うので�
 | `T`、`←` `→`、`esc` | ツアーの開始、移動、終了 |
 | `⌘` + スクロール、`⌘=` `⌘-` `⌘0` | 星図のズーム、全景に戻す |
 | `⌘` + クリック | 定義へ移動 |
-| `⌘[` `⌘]` | 移動履歴を戻る、進む |
+| `⌘[` `⌘]`、`←` `→` ボタン | 移動履歴を戻る、進む |
 | ドラッグ、`⌘C` | 行を選択、コピー |
 | `⌘⇧L` | シンボル一覧の切り替え |
 | `⌘⇧O` | リポジトリ一覧へ戻る |

@@ -337,7 +337,7 @@ impl Palette {
                         let first_in_file = i == 0
                             || !matches!(&self.rows[i - 1], Row::Line { hit: prev } if prev.path == hit.path);
                         let location = if first_in_file {
-                            middle_ellipsis(&format!("{}:{}", hit.path, hit.line + 1), 30)
+                            middle_ellipsis(&format!("{}:{}", hit.path, hit.line + 1), 27)
                         } else {
                             format!(":{}", hit.line + 1)
                         };
@@ -358,7 +358,7 @@ impl Palette {
                                     } else {
                                         theme::text_muted()
                                     })
-                                    .when(!first_in_file, |d| d.flex().justify_end().pr(px(12.)))
+                                    .when(!first_in_file, |d| d.pl(px(14.)))
                                     .child(location),
                             )
                             .child(

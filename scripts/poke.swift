@@ -21,6 +21,29 @@ case "click":
     CGEvent(mouseEventSource: src, mouseType: .leftMouseDown, mouseCursorPosition: p, mouseButton: .left)?.post(tap: .cghidEventTap)
     usleep(40000)
     CGEvent(mouseEventSource: src, mouseType: .leftMouseUp, mouseCursorPosition: p, mouseButton: .left)?.post(tap: .cghidEventTap)
+case "cmdclick":
+    let p = at(a[3], a[4])
+    CGEvent(mouseEventSource: src, mouseType: .mouseMoved, mouseCursorPosition: p, mouseButton: .left)?.post(tap: .cghidEventTap)
+    usleep(120000)
+    for type in [CGEventType.leftMouseDown, .leftMouseUp] {
+        let e = CGEvent(mouseEventSource: src, mouseType: type, mouseCursorPosition: p, mouseButton: .left)
+        e?.flags = .maskCommand
+        e?.post(tap: .cghidEventTap)
+        usleep(40000)
+    }
+case "drag":
+    let (from, to) = (at(a[3], a[4]), at(a[5], a[6]))
+    CGEvent(mouseEventSource: src, mouseType: .mouseMoved, mouseCursorPosition: from, mouseButton: .left)?.post(tap: .cghidEventTap)
+    usleep(120000)
+    CGEvent(mouseEventSource: src, mouseType: .leftMouseDown, mouseCursorPosition: from, mouseButton: .left)?.post(tap: .cghidEventTap)
+    usleep(60000)
+    for i in 1...12 {
+        let t = CGFloat(i) / 12
+        let p = CGPoint(x: from.x + (to.x - from.x) * t, y: from.y + (to.y - from.y) * t)
+        CGEvent(mouseEventSource: src, mouseType: .leftMouseDragged, mouseCursorPosition: p, mouseButton: .left)?.post(tap: .cghidEventTap)
+        usleep(25000)
+    }
+    CGEvent(mouseEventSource: src, mouseType: .leftMouseUp, mouseCursorPosition: to, mouseButton: .left)?.post(tap: .cghidEventTap)
 case "move":
     CGEvent(mouseEventSource: src, mouseType: .mouseMoved, mouseCursorPosition: at(a[3], a[4]), mouseButton: .left)?.post(tap: .cghidEventTap)
 case "key":

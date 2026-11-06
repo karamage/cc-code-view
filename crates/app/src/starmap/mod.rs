@@ -270,9 +270,11 @@ impl StarMap {
     }
 
     pub fn set_route(&mut self, route: Vec<usize>, upcoming: Vec<usize>, cx: &mut Context<Self>) {
-        self.route = route;
-        self.upcoming = upcoming;
-        cx.notify();
+        if self.route != route || self.upcoming != upcoming {
+            self.route = route;
+            self.upcoming = upcoming;
+            cx.notify();
+        }
     }
 
     pub fn set_read(&mut self, read: Vec<usize>, cx: &mut Context<Self>) {
@@ -437,6 +439,7 @@ impl Render for StarMap {
         let dim = self.dim;
         let focus_constellation = self.focus_constellation;
         let minimap = self.minimap;
+        let log_paint = self.frame_log.is_some();
         let viewport = self.viewport.clone();
 
         div()
@@ -509,7 +512,11 @@ impl Render for StarMap {
                             minimap,
                             reveal,
                         };
+                        let started = log_paint.then(Instant::now);
                         paint::paint(bounds, &frame, window, cx);
+                        if let Some(started) = started {
+                            eprintln!("CCV_PAINT {:.2}", started.elapsed().as_secs_f32() * 1000.0);
+                        }
                     },
                 )
                 .size_full(),

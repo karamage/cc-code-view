@@ -22,6 +22,16 @@ fn parse_path(output: &str) -> Option<String> {
     (!path.is_empty()).then(|| path.to_string())
 }
 
+/// PATH がまだ分かっていなければ、ログインシェルから補う。
+/// 起動直後の確認が終わる前に実行しても、誤って「見つからない」とならないように、
+/// 実行する側のスレッドで呼ぶ。
+pub fn with_resolved_path(cfg: ClaudeConfig) -> ClaudeConfig {
+    if cfg.path_env.is_some() {
+        return cfg;
+    }
+    ClaudeConfig { path_env: login_shell_path(), ..cfg }
+}
+
 /// 使える claude があるか確認する。隔離に必要な `--restricted` が無い版は使わない。
 pub fn preflight(cfg: &ClaudeConfig) -> Result<(), RunError> {
     let mut command = Command::new(&cfg.bin);
@@ -49,6 +59,12 @@ mod tests {
         assert_eq!(preflight(&fake_claude(dir.path(), "echo --restricted")), Ok(()));
         let cfg = ClaudeConfig { bin: "/nonexistent/claude".into(), path_env: None };
         assert_eq!(preflight(&cfg), Err(RunError::NotInstalled));
+    }
+
+    #[test]
+    fn known_path_is_kept_without_asking_the_shell() {
+        let cfg = ClaudeConfig { bin: "claude".into(), path_env: Some("/a".into()) };
+        assert_eq!(with_resolved_path(cfg).path_env.as_deref(), Some("/a"));
     }
 
     #[test]
