@@ -41,9 +41,10 @@ AI 解析は利用枠を消費するので、開始前に必ずモデルを確�
 | 星 | ファイル |
 | 星の大きさ | コード行数 |
 | 星の明るさ | Git の変更頻度（直近 1 年のコミット数） |
-| 線 | ファイルまたはモジュール間の依存関係 |
+| 明るい線 | 依存関係 |
+| 淡い線 | 同じ星座に属することを示す星座線 |
 
-- 星の配置は決定的に計算し、同じ入力からは同じ配置を返す。再解析しても地形が変わらないようにする。
+- 星の配置は決定的に計算し、同じモジュール分割からは常に同じ配置を返す。AI 解析が完了すると、星は新しい星座へ移動するアニメーションで並び替わる。
 - ズームは段階的に詳細化する。遠景では星座のみ、中景で主要ファイル名、近景で全ファイル名を出す。
 - 星をクリックするとコード表示が開く。
 - ワークスペースは星図とコードの 2 ペイン構成で、コードを開いていないときは星図を全面に表示する。
@@ -113,7 +114,7 @@ HEAD が保存時と異なる場合は「解析が古い」と表示する。古
 1. `core` が `.gitignore` を尊重して走査し、シンボルと依存を並列に抽出する。Git の変更頻度を加えて `RepoIndex` を作る。
 2. `app` が星図を描く。
 3. 利用者が開始すると、`ai` が `RepoIndex` を圧縮した骨格（ディレクトリ、主要シンボル、依存、変更頻度）をプロンプトに入れて `claude -p` を実行する。
-4. Claude は `Read`、`Grep`、`Glob` で必要な箇所を読み、結果を指定の JSON ファイルに書く。
+4. Claude は `Read`、`Grep`、`Glob` で必要な箇所を読み、スキーマに沿った結果を返す。
 5. `ai` が検証して `Analysis` を保存し、`app` が星図に反映する。
 
 重い処理はすべて gpui のバックグラウンド実行器で動かし、描画スレッドを止めない。
@@ -127,26 +128,31 @@ HEAD が保存時と異なる場合は「解析が古い」と表示する。古
 ```
 claude -p <prompt>
   --restricted --strict-mcp-config
-  --tools Read,Grep,Glob,Write
+  --tools Read,Grep,Glob
   --permission-mode dontAsk
-  --allowedTools Read,Grep,Glob,Edit(/<出力ファイル>)
+  --allowedTools Read,Grep,Glob
   --settings '{"permissions":{"blockReadsOutsideWorkingDirectories":true,"blockWritesOutsideWorkingDirectories":true}}'
+  --no-session-persistence
+  --json-schema <スキーマ>
   --output-format stream-json --verbose
   --add-dir <リポジトリ>
   [--model <モデル>]
 ```
 
-作業ディレクトリは実行ごとの空の一時ディレクトリとし、出力ファイルだけをそこに置く。
+作業ディレクトリは実行ごとの空の一時ディレクトリとし、標準入力は閉じる。
+Claude にファイルの書き込み権限は与えない。結果は `result` イベントの `structured_output` から受け取る。
 
-### 実装時に検証すること
+### 実機で確認済みのこと（Claude Code 2.1.319、2026-11-06）
 
-次の項目は結合テストとして実機で確認し、一つでも満たさなければスナップショット方式（`.claude/`、`.mcp.json`、`CLAUDE.md` などを除いた一時コピー）に切り替える。
+悪意のあるファイルを置いたリポジトリで確認した。
 
-- 悪意のある `.claude/settings.json` のフック、`.mcp.json`、`CLAUDE.md` が読み込まれないこと
-- リポジトリ外のファイルを読めないこと
-- 出力ファイル以外に書けないこと
-- `--restricted` の下でも利用者の認証で動作すること
-- `dontAsk` のまま出力ファイルへ書き込めること
+- `.claude/settings.json` のフック、`.mcp.json` のサーバーは起動しない
+- リポジトリ外のファイルは読めず、リポジトリへの書き込みもできない
+- Bash は使えない
+- 利用者の認証で動作し、`structured_output` を受け取れる
+- `CLAUDE.md` は自動では指示として扱われない。ただしリポジトリ内のファイルとして読める
+
+コード中の指示で解析結果が歪められる可能性は残るが、影響は表示内容に留まる。上記は再現用の結合テストとして残す。
 
 ### 出力の検証
 
@@ -155,6 +161,8 @@ claude -p <prompt>
 - AI の文章は書式なしのテキストとして表示し、リンクやコマンドとして解釈しない。
 
 ### 環境
+
+ビルドは gpui の `runtime_shaders` 機能を使い、Metal Toolchain を要求しない。
 
 Finder から起動すると `PATH` が不足するので、`cc-auto-review` と同様にログインシェルから `PATH` を取得する。
 
@@ -174,7 +182,7 @@ Finder から起動すると `PATH` が不足するので、`cc-auto-review` と
 世界観は B. Constellation。ほぼ黒の宇宙に、紫の主色と青緑の差し色を置く。
 モックアップは `.superpowers/brainstorm/` の `visual-direction.html` を出発点とする。
 
-- コードは等幅、UI は Hiragino Sans を基本とする。必要な書体はアプリに同梱する。
+- コードは同梱の JetBrains Mono、UI はシステムフォントと Hiragino Sans を基本とする。
 - 動きには意味を持たせる。カメラ移動はツアーの現在地を伝え、星座が灯る演出は解析の完了を伝える。
 - 「視差効果を減らす」の設定を尊重し、有効ならカメラ移動と演出を短いフェードに置き換える。
 - 全操作をキーボードで行えるようにし、本文のコントラスト比は 4.5:1 以上にする。
