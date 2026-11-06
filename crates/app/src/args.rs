@@ -11,6 +11,8 @@ pub enum DemoState {
     Code,
     Search,
     Deep,
+    /// 深掘りを実際に実行する。入力を送らずに確認するためのもの
+    DeepRun,
     Error,
     Unavailable,
 }
@@ -26,6 +28,7 @@ impl DemoState {
             "code" => DemoState::Code,
             "search" => DemoState::Search,
             "deep" => DemoState::Deep,
+            "deep-run" => DemoState::DeepRun,
             "error" => DemoState::Error,
             "unavailable" => DemoState::Unavailable,
             _ => return None,

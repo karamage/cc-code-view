@@ -141,7 +141,10 @@ fn run_ai<T: Send + 'static>(
                 for e in drained {
                     on_event(this, e, cx);
                 }
-                if let (Some(r), Some(f)) = (finished, on_done.take()) {
+                // 結果が届いたときにだけ取り出す。先に take すると完了処理を失う
+                if let Some(r) = finished
+                    && let Some(f) = on_done.take()
+                {
                     f(this, r, cx);
                 }
                 // 経過時間の表示を進める
@@ -417,7 +420,10 @@ impl Workspace {
                 AppState::set_tour_position(cx, &self.repo, 0);
                 self.apply_analysis(analysis, cx);
             }
-            Err(e) => self.state = transition(self.state.clone(), Ev::Failed(e)),
+            Err(e) => {
+                eprintln!("解析に失敗しました: {e}");
+                self.state = transition(self.state.clone(), Ev::Failed(e));
+            }
         }
     }
 
@@ -646,6 +652,10 @@ impl Workspace {
             }
             DemoState::Deep => {
                 self.open_constellation(0, cx);
+            }
+            DemoState::DeepRun => {
+                self.open_constellation(0, cx);
+                self.start_deep_dive(cx);
             }
             DemoState::Error => {
                 self.state = AnalysisState::Failed {
