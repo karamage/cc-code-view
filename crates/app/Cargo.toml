@@ -1,0 +1,10 @@
+[package]
+name = "cc-code-view"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+ccv-core = { path = "../core" }
+ccv-ai = { path = "../ai" }
+gpui.workspace = true
+anyhow.workspace = true
