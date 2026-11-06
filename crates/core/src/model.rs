@@ -1,5 +1,6 @@
 //! クレート間で共有するデータ型。
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Lang {
@@ -51,4 +52,22 @@ pub struct Symbol {
     pub kind: SymbolKind,
     /// 0 始まり
     pub line: u32,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct RepoIndex {
+    pub head: Option<String>,
+    pub files: Vec<FileEntry>,
+    pub symbols: HashMap<String, Vec<Symbol>>,
+    /// `files` の添字の組。依存元 → 依存先
+    pub edges: Vec<(u32, u32)>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Module {
+    pub id: String,
+    pub name: String,
+    pub summary: String,
+    /// ファイルかディレクトリの接頭辞
+    pub paths: Vec<String>,
 }
