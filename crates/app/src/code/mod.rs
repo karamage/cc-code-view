@@ -439,6 +439,12 @@ impl Render for CodeView {
             gpui::linear_color_stop(theme::panel(), 0.),
             gpui::linear_color_stop(theme::alpha(theme::panel(), 0.), 1.),
         );
+        // 右へはみ出す行があることを、端のぼかしで伝える
+        let fade_right = gpui::linear_gradient(
+            270.,
+            gpui::linear_color_stop(theme::panel(), 0.),
+            gpui::linear_color_stop(theme::alpha(theme::panel(), 0.), 1.),
+        );
         let crumbs: Vec<String> = path.split('/').map(str::to_string).collect();
         let crumb_count = crumbs.len();
 
@@ -496,6 +502,7 @@ impl Render for CodeView {
                             .flex_col()
                             .child(body)
                             .child(div().absolute().top_0().left_0().right_0().h(px(14.)).bg(fade_top))
+                            .child(div().absolute().top_0().bottom_0().right_0().w(px(28.)).bg(fade_right))
                             .child(
                                 div().absolute().bottom_0().left_0().right_0().h(px(18.)).bg(fade_bottom),
                             ),

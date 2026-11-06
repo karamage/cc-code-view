@@ -312,6 +312,14 @@ impl Palette {
                             .into_any_element()
                     }
                     Row::Line { hit } => {
+                        // 同じファイルの 2 件目以降はパスを繰り返さない
+                        let first_in_file = i == 0
+                            || !matches!(&self.rows[i - 1], Row::Line { hit: prev } if prev.path == hit.path);
+                        let location = if first_in_file {
+                            format!("{}:{}", hit.path, hit.line + 1)
+                        } else {
+                            format!(":{}", hit.line + 1)
+                        };
                         let (snippet, range) = snippet_around(&hit.text, &self.query, 34, 90);
                         let highlight = gpui::HighlightStyle {
                             color: Some(theme::white().into()),
@@ -324,8 +332,13 @@ impl Palette {
                                     .flex_none()
                                     .w(px(208.))
                                     .overflow_hidden()
-                                    .text_color(theme::text_muted())
-                                    .child(format!("{}:{}", hit.path, hit.line + 1)),
+                                    .text_color(if first_in_file {
+                                        theme::text()
+                                    } else {
+                                        theme::text_muted()
+                                    })
+                                    .when(!first_in_file, |d| d.flex().justify_end().pr(px(12.)))
+                                    .child(location),
                             )
                             .child(
                                 div()
@@ -355,7 +368,9 @@ impl Render for Palette {
         let status = if self.searching {
             "探しています…".to_string()
         } else {
-            format!("{} 件", self.rows.len())
+            // 上限で打ち切ったときは、それが全部ではないと分かるように
+            let suffix = if self.rows.len() >= LIMIT { "+" } else { "" };
+            format!("{}{} 件", self.rows.len(), suffix)
         };
         div()
             .key_context("Palette")

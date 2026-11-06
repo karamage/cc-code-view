@@ -38,6 +38,28 @@ pub fn fuzzy_files(query: &str, files: &[FileEntry], limit: usize) -> Vec<(usize
     scored.into_iter().map(|(_, _, i, idx)| (i, idx)).collect()
 }
 
+/// 1 ファイルから出す件数の上限。1 つの巨大なファイルで結果が埋まらないようにする。
+const MAX_HITS_PER_FILE: usize = 8;
+
+/// 検索の優先度。小さいほど先に探す。
+fn search_tier(rel: &Path) -> u8 {
+    let text = rel.to_string_lossy();
+    let generated = text.contains(".min.")
+        || rel.components().any(|c| {
+            matches!(
+                c.as_os_str().to_str(),
+                Some("dist" | "build" | "vendor" | "node_modules" | "target" | "docs" | "site")
+            )
+        });
+    if generated {
+        2
+    } else if Lang::from_path(&text) == Lang::Other {
+        1
+    } else {
+        0
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Hit {
     pub path: String,
@@ -67,16 +89,14 @@ pub fn search_content(root: &Path, query: &str, limit: usize, cancel: &AtomicBoo
         .filter(|e| e.file_type().is_some_and(|t| t.is_file()))
         .map(|e| e.into_path())
         .collect();
-    // 件数の上限に文書で達しないよう、コードから先に探す
-    paths.sort_by_key(|p| {
-        let is_code = Lang::from_path(&p.to_string_lossy()) != Lang::Other;
-        (!is_code, p.clone())
-    });
+    // 件数の上限に文書や生成物で達しないよう、ソースコードから先に探す
+    paths.sort_by_key(|p| (search_tier(p.strip_prefix(root).unwrap_or(p)), p.clone()));
     for path in paths {
         if cancel.load(Ordering::Relaxed) || hits.len() >= limit {
             break;
         }
         let rel = path.strip_prefix(root).unwrap_or(&path).to_string_lossy().replace('\\', "/");
+        let mut in_file = 0;
         let _ = searcher.search_path(
             &matcher,
             &path,
@@ -86,7 +106,10 @@ pub fn search_content(root: &Path, query: &str, limit: usize, cancel: &AtomicBoo
                     line: line.saturating_sub(1) as u32,
                     text: text.trim_end().to_string(),
                 });
-                Ok(hits.len() < limit && !cancel.load(Ordering::Relaxed))
+                in_file += 1;
+                Ok(in_file < MAX_HITS_PER_FILE
+                    && hits.len() < limit
+                    && !cancel.load(Ordering::Relaxed))
             }),
         );
     }
@@ -139,6 +162,20 @@ mod tests {
         let hits = search_content(dir.path(), "needle", 10, &AtomicBool::new(false));
         assert_eq!(hits[0].path, "z.rs");
         assert_eq!(hits[1].path, "a.md");
+    }
+
+    #[test]
+    fn generated_files_come_last_and_one_file_cannot_fill_the_results() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("docs")).unwrap();
+        std::fs::write(dir.path().join("docs/site.js"), "needle\n").unwrap();
+        std::fs::write(dir.path().join("notes.md"), "needle\n").unwrap();
+        std::fs::write(dir.path().join("z.rs"), "needle\n".repeat(50)).unwrap();
+        let hits = search_content(dir.path(), "needle", 100, &AtomicBool::new(false));
+        let paths: Vec<_> = hits.iter().map(|h| h.path.as_str()).collect();
+        assert_eq!(paths.iter().filter(|p| **p == "z.rs").count(), MAX_HITS_PER_FILE);
+        assert_eq!(paths[MAX_HITS_PER_FILE], "notes.md");
+        assert_eq!(paths[MAX_HITS_PER_FILE + 1], "docs/site.js");
     }
 
     #[test]

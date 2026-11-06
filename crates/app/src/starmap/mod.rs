@@ -52,6 +52,9 @@ pub struct StarMap {
     read: Vec<usize>,
     dim: f32,
     focus_constellation: Option<usize>,
+    minimap: bool,
+    /// 最後に映した停留所。ペインの幅が変わったら映し直す
+    framing: Option<(Option<usize>, usize)>,
     viewport: Rc<Cell<Bounds<Pixels>>>,
     drag: Option<(f32, f32)>,
     dragged: bool,
@@ -92,6 +95,8 @@ impl StarMap {
             read: Vec::new(),
             dim: 1.0,
             focus_constellation: None,
+            minimap: false,
+            framing: None,
             viewport: Rc::new(Cell::new(Bounds::default())),
             drag: None,
             dragged: false,
@@ -112,6 +117,10 @@ impl StarMap {
     /// 一度でも配置されたか。カメラの計算には画面の大きさが要る。
     pub fn is_laid_out(&self) -> bool {
         !self.needs_fit
+    }
+
+    pub fn selected(&self) -> Option<usize> {
+        self.selected
     }
 
     pub fn hovered(&self) -> Option<usize> {
@@ -183,33 +192,44 @@ impl StarMap {
 
     pub fn fit_all(&mut self, cx: &mut Context<Self>) {
         self.at_overview = true;
+        self.framing = None;
         let to = self.fit_camera();
         self.fly(to, cx);
     }
 
     pub fn fly_to_file(&mut self, file: usize, cx: &mut Context<Self>) {
-        let Some(s) = self.sky.stars.get(file) else { return };
-        self.at_overview = false;
-        let to = Camera { center: (s.x, s.y), zoom: self.camera.zoom.clamp(1.1, 2.0) };
-        self.fly(to, cx);
+        self.fly_between(None, file, cx);
     }
 
-    /// ツアーの移動。前の停留所と今の停留所が同時に見えるように映す。
+    /// 読んでいる星座の全体と、一つ前の停留所が同時に見えるように映す。
+    /// 読み始めても、星図を切り取られた脇役にしないため。
     pub fn fly_between(&mut self, from: Option<usize>, to: usize, cx: &mut Context<Self>) {
         let Some(target) = self.sky.stars.get(to).copied() else { return };
         self.at_overview = false;
-        let (w, h) = self.vp();
-        let camera = match from.and_then(|i| self.sky.stars.get(i).copied()) {
-            Some(prev) if from != Some(to) => {
-                let (dx, dy) = ((target.x - prev.x).abs() + 200.0, (target.y - prev.y).abs() + 200.0);
-                Camera {
-                    center: ((target.x + prev.x) / 2.0, (target.y + prev.y) / 2.0),
-                    zoom: (w / dx).min(h / dy).clamp(0.5, 2.0),
-                }
-            }
-            _ => Camera { center: (target.x, target.y), zoom: self.camera.zoom.clamp(1.1, 2.0) },
+        self.framing = Some((from, to));
+        let constellation = self.sky.star_constellation[to] as usize;
+        let c = &self.sky.constellations[constellation];
+        // 星座名の分だけ、上に余裕を見る
+        let mut bbox = (
+            c.center.0 - c.extent,
+            c.center.1 - c.extent - 34.0,
+            c.center.0 + c.extent,
+            c.center.1 + c.extent,
+        );
+        let extend = |b: &mut (f32, f32, f32, f32), x: f32, y: f32| {
+            *b = (b.0.min(x), b.1.min(y), b.2.max(x), b.3.max(y));
         };
-        self.fly(camera, cx);
+        extend(&mut bbox, target.x, target.y);
+        if let Some(prev) = from.and_then(|i| self.sky.stars.get(i).copied()) {
+            extend(&mut bbox, prev.x, prev.y);
+        }
+        let (w, h) = self.vp();
+        const PADDING: f32 = 120.0;
+        let zoom = ((w - PADDING) / (bbox.2 - bbox.0).max(1.0))
+            .min((h - PADDING) / (bbox.3 - bbox.1).max(1.0))
+            .clamp(0.4, 2.6);
+        let center = ((bbox.0 + bbox.2) / 2.0, (bbox.1 + bbox.3) / 2.0);
+        self.fly(Camera { center, zoom }, cx);
     }
 
     pub fn fly_to_constellation(&mut self, index: usize, cx: &mut Context<Self>) {
@@ -217,6 +237,7 @@ impl StarMap {
         let (w, h) = self.vp();
         let zoom = ((w.min(h) * 0.7) / (c.extent * 2.0 + 120.0)).clamp(0.6, 3.5);
         self.at_overview = false;
+        self.framing = None;
         // 左のパネルに隠れないよう、右へ寄せて映す
         let center = (c.center.0 - 180.0 / zoom, c.center.1);
         self.fly(Camera { center, zoom }, cx);
@@ -224,6 +245,7 @@ impl StarMap {
 
     pub fn zoom_step(&mut self, factor: f32, cx: &mut Context<Self>) {
         self.at_overview = false;
+        self.framing = None;
         let mut to = self.flight.as_ref().map_or(self.camera, |f| f.to);
         to.zoom = (to.zoom * factor).clamp(camera::MIN_ZOOM, MAX_ZOOM);
         let ms = if self.reduce_motion { 0 } else { 180 };
@@ -266,6 +288,13 @@ impl StarMap {
         }
     }
 
+    pub fn set_minimap(&mut self, on: bool, cx: &mut Context<Self>) {
+        if self.minimap != on {
+            self.minimap = on;
+            cx.notify();
+        }
+    }
+
     pub fn set_focus_constellation(&mut self, focus: Option<usize>, cx: &mut Context<Self>) {
         if self.focus_constellation != focus {
             self.focus_constellation = focus;
@@ -285,6 +314,7 @@ impl StarMap {
         };
         self.flight = None;
         self.at_overview = false;
+        self.framing = None;
         let vp = self.vp();
         if e.modifiers.platform || e.modifiers.control {
             let cursor = self.local(e.position);
@@ -334,6 +364,8 @@ impl Render for StarMap {
             if self.at_overview && !self.needs_fit {
                 let to = self.fit_camera();
                 self.fly(to, cx);
+            } else if let Some((from, to)) = self.framing {
+                self.fly_between(from, to, cx);
             }
         }
 
@@ -403,6 +435,7 @@ impl Render for StarMap {
         let read = self.read.clone();
         let dim = self.dim;
         let focus_constellation = self.focus_constellation;
+        let minimap = self.minimap;
         let viewport = self.viewport.clone();
 
         div()
@@ -442,6 +475,7 @@ impl Render for StarMap {
                     this.drag = Some(now);
                     this.flight = None;
                     this.at_overview = false;
+                    this.framing = None;
                     this.camera.pan(delta);
                     cx.notify();
                     return;
@@ -471,6 +505,7 @@ impl Render for StarMap {
                             read: &read,
                             dim,
                             focus_constellation,
+                            minimap,
                             reveal,
                         };
                         paint::paint(bounds, &frame, window, cx);

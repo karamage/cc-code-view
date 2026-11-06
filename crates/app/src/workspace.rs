@@ -227,7 +227,7 @@ impl Workspace {
             index.files.iter().enumerate().map(|(i, f)| (f.path.clone(), i)).collect();
         let side = analysis.is_some();
         map.update(cx, |m, cx| {
-            m.set_insets((24.0, 24.0, 104.0, if side { 300.0 } else { 24.0 }), cx)
+            m.set_insets((24.0, 24.0, 104.0, if side { 330.0 } else { 24.0 }), cx)
         });
         self.loaded = Some(Loaded {
             index,
@@ -245,7 +245,7 @@ impl Workspace {
     fn update_insets(&self, cx: &mut Context<Self>) {
         let Some(l) = &self.loaded else { return };
         let side = l.analysis.is_some() && !self.code_open;
-        let insets = (24.0, 24.0, 104.0, if side { 300.0 } else { 24.0 });
+        let insets = (24.0, 24.0, 104.0, if side { 330.0 } else { 24.0 });
         l.map.update(cx, |m, cx| m.set_insets(insets, cx));
     }
 
@@ -265,7 +265,14 @@ impl Workspace {
             AnalysisState::Running { .. } => 0.62,
             AnalysisState::Idle => 1.0,
         };
-        let focus = self.deep.as_ref().map(|d| d.constellation);
+        // 読んでいるファイルの星座を際立たせ、全体の中の位置を隅に示す
+        let selected = l.map.read(cx).selected();
+        let reading = self
+            .code_open
+            .then(|| selected.map(|i| l.map.read(cx).sky().star_constellation[i] as usize))
+            .flatten();
+        let focus = self.deep.as_ref().map(|d| d.constellation).or(reading);
+        let minimap = self.code_open;
         let read = if matches!(self.state, AnalysisState::Running { .. }) {
             self.read_stars.clone()
         } else {
@@ -275,6 +282,7 @@ impl Workspace {
             m.set_dim(dim, cx);
             m.set_focus_constellation(focus, cx);
             m.set_read(read, cx);
+            m.set_minimap(minimap, cx);
         });
     }
 
@@ -899,6 +907,7 @@ impl Workspace {
                         .child(div().text_color(theme::text()).child("AI 機能を使えません"))
                         .child(div().text_size(px(12.)).text_color(theme::text_muted()).child(message)),
                 )
+                .child(div().w(px(6.)))
                 .child(primary("install-claude", "入手方法を開く".into()).on_click(|_, _, cx| {
                     cx.open_url("https://claude.com/claude-code");
                 }))
@@ -950,50 +959,52 @@ impl Workspace {
                     .into_any_element()
             }
             AnalysisState::Failed { message, can_retry } => {
-                let limit_reached = message.starts_with("利用枠");
+                let label = match current {
+                    ModelChoice::Default => "再試行".to_string(),
+                    other => format!("{} で再試行", other.label()),
+                };
                 dock()
-                .child(div().flex_none().size(px(7.)).rounded_full().bg(theme::danger()))
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap(px(2.))
-                        .max_w(px(340.))
-                        .child(
-                            div()
-                                .text_size(px(12.5))
-                                .line_height(px(18.))
-                                .text_color(theme::text())
-                                .child(message),
-                        )
-                        .child(
-                            div()
-                                .text_size(px(11.5))
-                                .text_color(theme::text_muted())
-                                .child("星図とコードはこのまま使えます。別のモデルでも試せます。"),
-                        ),
-                )
-                .child(picker(cx))
-                .when(can_retry && !limit_reached, |d| {
-                    d.child(primary("retry", "再試行".into()).on_click(cx.listener(
+                    .border_color(theme::alpha(theme::danger(), 0.6))
+                    .child(div().flex_none().size(px(9.)).rounded_full().bg(theme::danger()))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(2.))
+                            .max_w(px(400.))
+                            .child(
+                                div()
+                                    .text_size(px(13.))
+                                    .line_height(px(18.))
+                                    .text_color(theme::white())
+                                    .child(message),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(11.5))
+                                    .text_color(theme::text_muted())
+                                    .child("星図とコードはこのまま使えます。"),
+                            ),
+                    )
+                    .when(can_retry, |d| {
+                        d.child(primary("retry", label.into()).on_click(cx.listener(
+                            |this, _, _, cx| {
+                                this.state = AnalysisState::Idle;
+                                this.run_analysis(cx);
+                            },
+                        )))
+                    })
+                    // モデルを変える人は、いつもの選択画面へ戻す
+                    .child(secondary("change-model", "モデルを変える").on_click(cx.listener(
                         |this, _, _, cx| {
                             this.state = AnalysisState::Idle;
-                            this.run_analysis(cx);
+                            this.show_reanalyze = true;
+                            cx.notify();
                         },
                     )))
-                })
-                // 利用枠の上限では、すぐの再試行を主役にしない
-                .when(can_retry && limit_reached, |d| {
-                    d.child(secondary("retry", "再試行").on_click(cx.listener(
-                        |this, _, _, cx| {
-                            this.state = AnalysisState::Idle;
-                            this.run_analysis(cx);
-                        },
-                    )))
-                })
-                .into_any_element()
+                    .into_any_element()
             }
-            AnalysisState::Idle if !has_analysis => dock()
+            AnalysisState::Idle if !has_analysis && !self.show_reanalyze => dock()
                 .child(picker(cx))
                 .child(
                     primary(
@@ -1004,11 +1015,11 @@ impl Workspace {
                 )
                 .into_any_element(),
             AnalysisState::Idle => {
-                let (model_used, stops) = self
+                let stops = self
                     .loaded
                     .as_ref()
                     .and_then(|l| l.analysis.as_ref())
-                    .map_or((ModelChoice::Default, 0), |a| (a.model, a.tour.len()));
+                    .map_or(0, |a| a.tour.len());
                 let show = self.show_reanalyze;
                 dock()
                     .when(show, |d| {
@@ -1030,13 +1041,7 @@ impl Workspace {
                                     .on_click(cx.listener(|this, _, _, cx| this.start_tour(cx))),
                             )
                         })
-                        .child(
-                            div()
-                                .text_size(px(12.))
-                                .text_color(theme::text_muted())
-                                .child(format!("{} で解析", model_used.label())),
-                        )
-                        .child(icon_button("reanalyze", "再解析").on_click(cx.listener(
+                        .child(secondary("reanalyze", "再解析").on_click(cx.listener(
                             |this, _, _, cx| {
                                 this.show_reanalyze = true;
                                 cx.notify();
@@ -1087,7 +1092,7 @@ impl Workspace {
                                 .text_size(px(11.))
                                 .font_family(theme::CODE_FONT)
                                 .text_color(theme::teal())
-                                .child(format!("STOP {} / {}", position + 1, total)),
+                                .child(format!("停留所 {} / {}", position + 1, total)),
                         )
                         .child(
                             div()
@@ -1292,28 +1297,109 @@ impl Workspace {
         )
     }
 
-    fn render_overview(&self, window: &mut Window) -> Option<gpui::AnyElement> {
+    /// 全景の左の列。概要と星座の一覧を並べ、星図への入口にする。
+    fn render_overview(&self, window: &mut Window, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
         if self.deep.is_some() || self.code_open {
             return None;
         }
-        let analysis = self.loaded.as_ref()?.analysis.as_ref()?;
+        let l = self.loaded.as_ref()?;
+        let analysis = l.analysis.as_ref()?;
+        let sky = l.map.read(cx).sky().clone();
+        let mut order: Vec<usize> = (0..sky.constellations.len()).collect();
+        order.sort_by_key(|i| std::cmp::Reverse(sky.constellations[*i].lines));
+        const MAX_ROWS: usize = 12;
+        let hidden = order.len().saturating_sub(MAX_ROWS);
+        order.truncate(MAX_ROWS);
+        let biggest = order.first().map_or(1, |i| sky.constellations[*i].lines).max(1) as f32;
+        let meta = format!("{} で解析", analysis.model.label());
+        let rows: Vec<_> = order
+            .into_iter()
+            .map(|ci| {
+                let c = &sky.constellations[ci];
+                let share = (c.lines as f32 / biggest).sqrt();
+                div()
+                    .id(("constellation-row", ci))
+                    .h(px(26.))
+                    .px(px(8.))
+                    .mx(px(-8.))
+                    .rounded(px(6.))
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .cursor_pointer()
+                    .hover(|h| h.bg(theme::alpha(theme::violet(), 0.14)))
+                    .child(
+                        // 行の下地に規模を示す
+                        div()
+                            .flex_none()
+                            .w(px(3.0 + share * 34.0))
+                            .h(px(2.))
+                            .rounded_full()
+                            .bg(theme::violet()),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .whitespace_nowrap()
+                            .text_size(px(12.5))
+                            .text_color(theme::text())
+                            .child(c.name.clone()),
+                    )
+                    .child(
+                        div()
+                            .flex_none()
+                            .text_size(px(11.))
+                            .font_family(theme::CODE_FONT)
+                            .text_color(theme::text_muted())
+                            .child(c.file_count.to_string()),
+                    )
+                    .on_click(cx.listener(move |this, _, _, cx| this.open_constellation(ci, cx)))
+            })
+            .collect();
         Some(
             div()
                 .absolute()
                 .top(px(20.))
                 .left(px(22.))
-                .w(px(318.))
+                .w(px(288.))
                 .flex()
                 .flex_col()
-                .gap(px(8.))
                 .child(
                     div()
+                        .flex()
+                        .justify_between()
                         .text_size(px(11.))
-                        .font_family(theme::CODE_FONT)
-                        .text_color(theme::teal())
-                        .child("このリポジトリ"),
+                        .child(div().text_color(theme::teal()).child("このリポジトリ"))
+                        .child(div().text_color(theme::text_muted()).child(meta)),
                 )
-                .child(paragraph(&analysis.overview, 318.0, 15.0, 25.0, theme::white(), window))
+                .child(div().mt(px(8.)).child(paragraph(
+                    &analysis.overview,
+                    288.0,
+                    14.5,
+                    24.0,
+                    theme::white(),
+                    window,
+                )))
+                .child(
+                    div()
+                        .mt(px(22.))
+                        .mb(px(4.))
+                        .text_size(px(11.))
+                        .text_color(theme::teal())
+                        .child("星座"),
+                )
+                .children(rows)
+                .when(hidden > 0, |d| {
+                    d.child(
+                        div()
+                            .mt(px(4.))
+                            .text_size(px(11.))
+                            .text_color(theme::text_muted())
+                            .child(format!("ほか {hidden} 個は星図から開けます")),
+                    )
+                })
                 .into_any_element(),
         )
     }
@@ -1347,6 +1433,12 @@ impl Workspace {
             }
         };
         let legend = hovered.is_none();
+        // AI を使えないときは、解説の案内を出さない
+        let hint = if matches!(self.state, AnalysisState::Unavailable(_)) {
+            "星でコード  ⌘ + スクロールで拡大"
+        } else {
+            "星でコード  星座名で解説  ⌘ + スクロールで拡大"
+        };
         Some(
             div()
                 .absolute()
@@ -1375,7 +1467,7 @@ impl Workspace {
                         .child(key(theme::star_test(), "テスト"))
                         .child(key(theme::star_doc(), "文書と設定"))
                         .child(div().flex_1())
-                        .child("星でコード  星座名で解説  ⌘ + スクロールで拡大")
+                        .child(hint)
                 })
                 .into_any_element(),
         )
@@ -1444,7 +1536,7 @@ impl Render for Workspace {
         let dock = self.render_dock(cx);
         let tour_note = self.render_tour_note(window, cx);
         let deep = self.render_deep(window, cx);
-        let overview = self.render_overview(window);
+        let overview = self.render_overview(window, cx);
         let stats = self.render_stats(cx);
         let touring = self.tour.is_some();
         let deep_open = self.deep.is_some();

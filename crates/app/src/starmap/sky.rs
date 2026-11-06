@@ -77,6 +77,8 @@ pub struct Constellation {
     pub extent: f32,
     pub file_count: usize,
     pub lines: u64,
+    /// 星座を代表する星。線の端点にする
+    pub anchor: usize,
     /// `None` は AI が割り当てなかった「その他」
     pub module_index: Option<usize>,
 }
@@ -130,9 +132,11 @@ pub fn build_sky(index: &RepoIndex, modules: &[Module]) -> Sky {
             continue;
         }
         // 名前を出す価値のあるファイルから順に、形と順位を決める
+        let is_code = |i: usize| classify(&index.files[i].path, index.files[i].lang) == StarKind::Code;
         list.sort_by(|a, b| {
             labeled[*b]
                 .cmp(&labeled[*a])
+                .then(is_code(*b).cmp(&is_code(*a)))
                 .then(stars[*b].radius.total_cmp(&stars[*a].radius))
                 .then_with(|| index.files[*a].path.cmp(&index.files[*b].path))
         });
@@ -176,6 +180,7 @@ pub fn build_sky(index: &RepoIndex, modules: &[Module]) -> Sky {
             extent,
             file_count: list.len(),
             lines: list.iter().map(|i| index.files[*i].lines as u64).sum(),
+            anchor: list[0],
             module_index: (slot < modules.len()).then_some(slot),
         });
     }
@@ -303,6 +308,11 @@ mod tests {
         assert_eq!(sky.labeled, [true, true, false]);
         // 大きくても、ロックファイルは星座の主役にしない
         assert_eq!(sky.rank[2], 1);
+        // 大きくても、テストより本体のコードを先に名前で示す
+        let files = vec![file("a/x.test.ts", 9000), file("a/x.ts", 10)];
+        let index = RepoIndex { files, ..Default::default() };
+        let sky = build_sky(&index, &[module("a")]);
+        assert_eq!(sky.rank[1], 0);
     }
 
     #[test]

@@ -10,7 +10,7 @@ pub fn hairline() -> Rgba { rgb(0x20233c) }
 pub fn hairline_strong() -> Rgba { rgb(0x34385c) }
 pub fn text() -> Rgba { rgb(0xe4e6f6) }
 /// space の上で 4.5:1 以上
-pub fn text_muted() -> Rgba { rgb(0x9397b8) }
+pub fn text_muted() -> Rgba { rgb(0xa5a9c8) }
 pub fn violet() -> Rgba { rgb(0xa8a4ff) }
 pub fn teal() -> Rgba { rgb(0x73e2d4) }
 pub fn white() -> Rgba { rgb(0xffffff) }
