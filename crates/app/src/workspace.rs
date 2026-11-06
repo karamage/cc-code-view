@@ -1,7 +1,7 @@
 //! リポジトリを開いた画面。星図、コード、ツアー、解析をつなぐ。
 use crate::analysis::{AnalysisState, Ev, transition};
 use crate::args::DemoState;
-use crate::code::{CodeEvent, CodeView, icon_button};
+use crate::code::{CodeEvent, CodeView, group_digits, icon_button};
 use crate::ja_text::paragraph;
 use crate::model_picker::model_picker;
 use crate::palette::{Palette, PaletteEvent, PaletteMode};
@@ -1135,7 +1135,7 @@ impl Workspace {
                         .text_size(px(11.5))
                         .font_family(theme::CODE_FONT)
                         .text_color(theme::text_muted())
-                        .child(format!("{} files · {} lines", panel.files, panel.lines)),
+                        .child(format!("{} files · {} lines", group_digits(panel.files as u64), group_digits(panel.lines))),
                 )
                 .when(!panel.summary.is_empty(), |d| {
                     d.child(div().mt(px(12.)).child(paragraph(
@@ -1178,14 +1178,19 @@ impl Workspace {
         let content = match hovered {
             Some(i) => {
                 let f = &l.index.files[i];
-                format!("{}  ·  {} lines  ·  直近 1 年で {} 回変更", f.path, f.lines, f.churn)
+                format!(
+                    "{}  ·  {} lines  ·  直近 1 年で {} 回変更",
+                    f.path,
+                    group_digits(f.lines as u64),
+                    f.churn
+                )
             }
             None => {
                 let total: u64 = l.index.files.iter().map(|f| f.lines as u64).sum();
                 format!(
                     "{} files · {} lines · 星座 {}　　大きさ = コード量　明るさ = 変更頻度",
-                    l.index.files.len(),
-                    total,
+                    group_digits(l.index.files.len() as u64),
+                    group_digits(total),
                     sky.constellations.len()
                 )
             }

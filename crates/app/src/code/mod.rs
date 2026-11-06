@@ -91,6 +91,19 @@ fn human_bytes(bytes: u64) -> String {
     }
 }
 
+/// 3 桁区切りで数を表示する。
+pub fn group_digits(n: u64) -> String {
+    let digits = n.to_string();
+    let mut out = String::new();
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
+}
+
 /// 色の区間を、切り詰めたあとの行に収める。
 fn clip_spans(spans: &[Span], text_len: usize) -> Vec<(Range<usize>, HighlightStyle)> {
     let mut out = Vec::with_capacity(spans.len());
@@ -590,6 +603,14 @@ mod tests {
         index.symbols.insert("a.rs".into(), vec![s("run", 1)]);
         assert_eq!(definitions(&index, "run"), [("a.rs".to_string(), 1), ("b.rs".to_string(), 3)]);
         assert!(definitions(&index, "nope").is_empty());
+    }
+
+    #[test]
+    fn digits_are_grouped() {
+        assert_eq!(group_digits(0), "0");
+        assert_eq!(group_digits(999), "999");
+        assert_eq!(group_digits(1000), "1,000");
+        assert_eq!(group_digits(1234567), "1,234,567");
     }
 
     #[test]

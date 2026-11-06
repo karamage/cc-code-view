@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 const MIN_SPLIT_ABOVE: usize = 60;
 /// 星座がこれより増えると全景が読めなくなる。大きなリポジトリほど粗く分ける
 const TARGET_MODULES: usize = 24;
-const ROOT_NAME: &str = "(root)";
+const ROOT_NAME: &str = "ルート直下";
 
 pub fn provisional_modules(files: &[FileEntry]) -> Vec<Module> {
     let mut out = Vec::new();
@@ -27,7 +27,7 @@ fn split(prefix: &str, paths: &[&str], split_above: usize, out: &mut Vec<Module>
         }
     }
     if !direct.is_empty() {
-        let name = if prefix.is_empty() { ROOT_NAME.to_string() } else { format!("{}/(files)", prefix.trim_end_matches('/')) };
+        let name = if prefix.is_empty() { ROOT_NAME.to_string() } else { format!("{} 直下", prefix.trim_end_matches('/')) };
         out.push(module(&name, direct.iter().map(|s| s.to_string()).collect()));
     }
     for (dir, items) in children {
@@ -82,7 +82,7 @@ mod tests {
         }
         files.push(file("small/a.rs"));
         let names: Vec<_> = provisional_modules(&files).into_iter().map(|m| m.name).collect();
-        assert_eq!(names, ["(root)", "big/sub0", "big/sub1", "big/sub2", "small"]);
+        assert_eq!(names, ["big/sub0", "big/sub1", "big/sub2", "small", "ルート直下"]);
     }
 
     #[test]
