@@ -131,7 +131,7 @@ claude -p <prompt>
   --tools Read,Grep,Glob
   --permission-mode dontAsk
   --allowedTools Read,Grep,Glob
-  --settings '{"permissions":{"blockReadsOutsideWorkingDirectories":true,"blockWritesOutsideWorkingDirectories":true}}'
+  --settings '{"permissions":{"blockReadsOutsideWorkingDirectories":true,"blockWritesOutsideWorkingDirectories":true,"deny":["Read(//**/.env)", ...]}}'
   --no-session-persistence
   --json-schema <スキーマ>
   --output-format stream-json --verbose
@@ -140,7 +140,8 @@ claude -p <prompt>
 ```
 
 作業ディレクトリは実行ごとの空の一時ディレクトリとし、標準入力は閉じる。
-Claude にファイルの書き込み権限は与えない。結果は `result` イベントの `structured_output` から受け取る。
+Claude にファイルの書き込み権限は与えない。読まれたファイルは外部の API に送られるので、`.env`、秘密鍵、認証情報のファイルは `deny` で読ませない（一覧は `crates/ai/src/command.rs`）。
+結果は `result` イベントの `structured_output` から受け取る。
 
 ### 実機で確認済みのこと（Claude Code 2.1.319、2026-11-06）
 
