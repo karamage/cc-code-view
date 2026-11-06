@@ -36,6 +36,23 @@ fn jitter(path: &str) -> (f32, f32) {
     ((h % 10_000) as f32 / 10_000.0, ((h2 >> 8) % 10_000) as f32 / 10_000.0)
 }
 
+/// 螺旋上の位置を星に割り当てる。大きな星が中心に固まると塊に見えるので、
+/// 上位の星を全体へ散らし、残りで隙間を埋める。
+fn spread_slots(count: usize) -> Vec<usize> {
+    const LEADING: usize = 10;
+    let leading = LEADING.min(count);
+    let mut taken = vec![false; count];
+    let mut slots = Vec::with_capacity(count);
+    for i in 0..leading {
+        let slot = if leading > 1 { i * (count - 1) / (leading - 1) } else { 0 };
+        // 面積が一様になるよう、中心から外へ順に使う
+        taken[slot] = true;
+        slots.push(slot);
+    }
+    slots.extend((0..count).filter(|k| !taken[*k]));
+    slots
+}
+
 /// `assignment` はファイルごとのモジュール添字。`module_count` は「その他」も含めた数の上限で、
 /// 範囲外の添字は `module_count` 番目の星座にまとめる。
 pub fn layout(files: &[FileEntry], assignment: &[usize], module_count: usize) -> Vec<Star> {
@@ -70,8 +87,9 @@ pub fn layout(files: &[FileEntry], assignment: &[usize], module_count: usize) ->
             list.iter().map(|i| star_radius(files[*i].lines)).sum::<f32>() / list.len() as f32;
         let spacing = mean.max(1.4) * 4.4;
         let mut extent = 0.0f32;
+        let slots = spread_slots(list.len());
         for (k, i) in list.iter().enumerate() {
-            let (mut x, mut y) = phyllotaxis(k, spacing);
+            let (mut x, mut y) = phyllotaxis(slots[k], spacing);
             // 螺旋の規則性を崩して、自然な星の散らばりにする
             let (ja, jb) = jitter(&files[*i].path);
             let angle = ja * std::f32::consts::TAU;
@@ -149,6 +167,21 @@ mod tests {
             }
         }
         assert!(close < 5, "overlaps: {close}");
+    }
+
+    #[test]
+    fn slots_use_every_position_once_and_spread_the_leaders() {
+        for count in [0, 1, 2, 9, 10, 11, 200] {
+            let mut slots = spread_slots(count);
+            let leaders: Vec<usize> = slots.iter().take(10).copied().collect();
+            slots.sort_unstable();
+            assert_eq!(slots, (0..count).collect::<Vec<_>>(), "{count}");
+            if count == 200 {
+                assert_eq!(leaders[0], 0);
+                assert_eq!(leaders[9], 199);
+                assert!(leaders[4] > 50);
+            }
+        }
     }
 
     #[test]

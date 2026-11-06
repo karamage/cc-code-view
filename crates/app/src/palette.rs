@@ -23,7 +23,8 @@ pub enum PaletteMode {
 
 pub enum PaletteEvent {
     Open(String, Option<u32>),
-    Preview(String),
+    /// 選択中のファイルと、検索結果に含まれるファイル
+    Preview(Vec<String>),
     Dismiss,
 }
 
@@ -60,6 +61,32 @@ impl Selection {
     }
 }
 
+/// 一致箇所が見えるよう、前後を切り詰めた文字列と、その中の一致範囲を返す。
+fn snippet_around(
+    text: &str,
+    query: &str,
+    before: usize,
+    max_chars: usize,
+) -> (String, Option<Range<usize>>) {
+    let trimmed = text.trim_start();
+    // 大文字小文字を無視して探す。文字数が変わる文字があれば強調だけ諦める
+    let lower = trimmed.to_lowercase();
+    let at = (lower.len() == trimmed.len() && !query.is_empty())
+        .then(|| lower.find(&query.to_lowercase()))
+        .flatten();
+    let Some(at) = at else {
+        return (trimmed.chars().take(max_chars).collect(), None);
+    };
+    let chars_before = trimmed[..at].chars().count();
+    let skip = chars_before.saturating_sub(before);
+    let prefix = if skip > 0 { "…" } else { "" };
+    let body: String = trimmed.chars().skip(skip).take(max_chars).collect();
+    let local = trimmed[..at].chars().skip(skip).map(char::len_utf8).sum::<usize>();
+    let start = prefix.len() + local;
+    let end = (start + query.len()).min(prefix.len() + body.len());
+    (format!("{prefix}{body}"), Some(start..end))
+}
+
 enum Row {
     File { path: SharedString, matched: Vec<u32> },
     Line { hit: Hit },
@@ -78,6 +105,7 @@ pub struct Palette {
     cancel: Arc<AtomicBool>,
     searching: bool,
     generation: u64,
+    query: String,
     _subscription: Subscription,
 }
 
@@ -113,6 +141,7 @@ impl Palette {
             cancel: Arc::new(AtomicBool::new(false)),
             searching: false,
             generation: 0,
+            query: String::new(),
             _subscription: subscription,
         };
         palette.refresh(cx);
@@ -125,6 +154,7 @@ impl Palette {
 
     fn refresh(&mut self, cx: &mut Context<Self>) {
         let query = self.input.read(cx).content().to_string();
+        self.query = query.clone();
         match self.mode {
             PaletteMode::Files => {
                 self.rows = fuzzy_files(&query, &self.index.files, LIMIT)
@@ -183,12 +213,24 @@ impl Palette {
     }
 
     fn preview(&self, cx: &mut Context<Self>) {
-        if let Some(path) = self.selection.current().and_then(|i| self.rows.get(i)).map(|r| match r {
+        let path_of = |r: &Row| match r {
             Row::File { path, .. } => path.to_string(),
             Row::Line { hit } => hit.path.clone(),
-        }) {
-            cx.emit(PaletteEvent::Preview(path));
+        };
+        // 全文検索では、一致したファイルをすべて星図で光らせる
+        let mut paths: Vec<String> = Vec::new();
+        if let Some(selected) = self.selection.current().and_then(|i| self.rows.get(i)) {
+            paths.push(path_of(selected));
         }
+        if self.mode == PaletteMode::Content {
+            for row in self.rows.iter().take(120) {
+                let p = path_of(row);
+                if !paths.contains(&p) {
+                    paths.push(p);
+                }
+            }
+        }
+        cx.emit(PaletteEvent::Preview(paths));
     }
 
     fn select_next(&mut self, _: &SelectNext, _: &mut Window, cx: &mut Context<Self>) {
@@ -269,21 +311,33 @@ impl Palette {
                             .child(gpui::StyledText::new(path.clone()).with_highlights(highlights))
                             .into_any_element()
                     }
-                    Row::Line { hit } => base
-                        .whitespace_nowrap()
-                        .child(
-                            div()
-                                .flex_none()
-                                .text_color(theme::teal())
-                                .child(format!("{}:{}", hit.path, hit.line + 1)),
-                        )
-                        .child(
-                            div()
-                                .overflow_hidden()
-                                .text_color(theme::tok_plain())
-                                .child(hit.text.trim_start().chars().take(200).collect::<String>()),
-                        )
-                        .into_any_element(),
+                    Row::Line { hit } => {
+                        let (snippet, range) = snippet_around(&hit.text, &self.query, 34, 90);
+                        let highlight = gpui::HighlightStyle {
+                            color: Some(theme::white().into()),
+                            background_color: Some(theme::alpha(theme::teal(), 0.32)),
+                            ..Default::default()
+                        };
+                        base.whitespace_nowrap()
+                            .child(
+                                div()
+                                    .flex_none()
+                                    .w(px(236.))
+                                    .overflow_hidden()
+                                    .text_color(theme::text_muted())
+                                    .child(format!("{}:{}", hit.path, hit.line + 1)),
+                            )
+                            .child(
+                                div()
+                                    .overflow_hidden()
+                                    .text_color(theme::tok_plain())
+                                    .child(
+                                        gpui::StyledText::new(snippet)
+                                            .with_highlights(range.map(|r| (r, highlight))),
+                                    ),
+                            )
+                            .into_any_element()
+                    }
                 }
             })
             .collect()
@@ -309,7 +363,7 @@ impl Render for Palette {
             .on_action(cx.listener(Self::select_prev))
             .on_action(cx.listener(Self::confirm))
             .on_action(cx.listener(Self::dismiss))
-            .w(px(680.))
+            .w(px(760.))
             .max_h(px(480.))
             .flex()
             .flex_col()
@@ -368,7 +422,7 @@ impl Render for Palette {
                     cx.processor(|this, range: Range<usize>, _, cx| this.render_rows(range, cx)),
                 )
                 .track_scroll(self.scroll.clone())
-                .h(px(420.))
+                .h(px(34. * 12.))
                 .into_any_element()
             })
     }
@@ -377,6 +431,19 @@ impl Render for Palette {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn snippet_keeps_the_match_visible_and_marks_it() {
+        let long = format!("{}needle tail", "x".repeat(100));
+        let (text, range) = snippet_around(&long, "NEEDLE", 10, 40);
+        let range = range.unwrap();
+        assert!(text.starts_with('…'));
+        assert_eq!(&text[range], "needle");
+        let (text, range) = snippet_around("  短い needle です", "needle", 10, 40);
+        assert_eq!(text, "短い needle です");
+        assert_eq!(&text[range.unwrap()], "needle");
+        assert_eq!(snippet_around("abc", "zzz", 10, 40), ("abc".to_string(), None));
+    }
 
     #[test]
     fn selection_wraps_and_resets_on_new_results() {

@@ -391,7 +391,8 @@ impl Render for CodeView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let path = self.path.clone().unwrap_or_default();
         let symbols: Vec<Symbol> = self.symbols().to_vec();
-        let show_symbols = self.symbols_open && !symbols.is_empty();
+        // 数個しかないときは、コードの幅を優先する
+        let show_symbols = self.symbols_open && symbols.len() >= 4;
 
         let body = match &self.content {
             Content::Empty => div().flex_1().into_any_element(),
@@ -477,7 +478,7 @@ impl Render for CodeView {
                         d.child(
                             div()
                                 .id("symbols")
-                                .w(px(208.))
+                                .w(px(176.))
                                 .flex_none()
                                 .h_full()
                                 .overflow_y_scroll()

@@ -44,6 +44,7 @@ pub struct StarMap {
     reveal_start: Option<Instant>,
     reveal_duration: Duration,
     hovered: Option<usize>,
+    hovered_constellation: Option<usize>,
     selected: Option<usize>,
     lit: Vec<usize>,
     route: Vec<usize>,
@@ -79,6 +80,7 @@ impl StarMap {
             reveal_start: Some(Instant::now()),
             reveal_duration: Duration::from_millis(1400),
             hovered: None,
+            hovered_constellation: None,
             selected: None,
             lit: Vec::new(),
             route: Vec::new(),
@@ -182,6 +184,24 @@ impl StarMap {
         self.at_overview = false;
         let to = Camera { center: (s.x, s.y), zoom: self.camera.zoom.clamp(1.1, 2.0) };
         self.fly(to, cx);
+    }
+
+    /// ツアーの移動。前の停留所と今の停留所が同時に見えるように映す。
+    pub fn fly_between(&mut self, from: Option<usize>, to: usize, cx: &mut Context<Self>) {
+        let Some(target) = self.sky.stars.get(to).copied() else { return };
+        self.at_overview = false;
+        let (w, h) = self.vp();
+        let camera = match from.and_then(|i| self.sky.stars.get(i).copied()) {
+            Some(prev) if from != Some(to) => {
+                let (dx, dy) = ((target.x - prev.x).abs() + 200.0, (target.y - prev.y).abs() + 200.0);
+                Camera {
+                    center: ((target.x + prev.x) / 2.0, (target.y + prev.y) / 2.0),
+                    zoom: (w / dx).min(h / dy).clamp(0.5, 2.0),
+                }
+            }
+            _ => Camera { center: (target.x, target.y), zoom: self.camera.zoom.clamp(1.1, 2.0) },
+        };
+        self.fly(camera, cx);
     }
 
     pub fn fly_to_constellation(&mut self, index: usize, cx: &mut Context<Self>) {
@@ -344,6 +364,8 @@ impl Render for StarMap {
         let positions = morph_positions.unwrap_or_else(|| self.positions.clone());
         let camera = self.camera;
         let hovered = self.hovered;
+        let hovered_constellation = self.hovered_constellation;
+        let pointer = hovered.is_some() || hovered_constellation.is_some();
         let selected = self.selected;
         let lit = self.lit.clone();
         let route = self.route.clone();
@@ -352,6 +374,7 @@ impl Render for StarMap {
         div()
             .id("starmap")
             .size_full()
+            .when(pointer, |d| d.cursor_pointer())
             .on_scroll_wheel(cx.listener(|this, e: &ScrollWheelEvent, _, cx| this.on_scroll(e, cx)))
             .on_mouse_down(
                 gpui::MouseButton::Left,
@@ -390,8 +413,10 @@ impl Render for StarMap {
                     return;
                 }
                 let hover = this.star_at(e.position);
-                if hover != this.hovered {
+                let over = if hover.is_none() { this.constellation_at(e.position) } else { None };
+                if hover != this.hovered || over != this.hovered_constellation {
                     this.hovered = hover;
+                    this.hovered_constellation = over;
                     cx.notify();
                 }
             }))
@@ -404,6 +429,7 @@ impl Render for StarMap {
                             positions: &positions,
                             camera,
                             hovered,
+                            hovered_constellation,
                             lit: &lit,
                             selected,
                             route: &route,

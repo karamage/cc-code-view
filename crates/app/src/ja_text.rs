@@ -20,7 +20,10 @@ fn no_line_end(c: char) -> bool {
 
 /// 途中で切らない欧文の語の文字。
 fn is_word(c: char) -> bool {
-    c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '/' | '.' | '\'' | ':' | '$' | '%' | '#' | '@' | '~')
+    c.is_ascii_alphanumeric()
+        || matches!(c, '_' | '-' | '/' | '.' | '\'' | ':' | '$' | '%' | '#' | '@' | '~')
+        // カタカナ語も途中で切らない（「ディ/レクトリ」を避ける）
+        || matches!(c, 'ァ'..='ヶ' | 'ー')
 }
 
 /// 文字幅を `advance` で測りながら行に分ける。
@@ -166,6 +169,12 @@ mod tests {
         let got = lines(text, 6.0);
         assert!(got.iter().any(|l| l.contains("claude-p")), "{got:?}");
         assert_eq!(got.concat().replace(' ', ""), text.replace(' ', ""));
+    }
+
+    #[test]
+    fn katakana_words_stay_together() {
+        let got = lines("一時ディレクトリに置く", 7.0);
+        assert!(got.iter().any(|l| l.contains("ディレクトリ")), "{got:?}");
     }
 
     #[test]

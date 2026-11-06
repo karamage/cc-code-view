@@ -309,13 +309,18 @@ impl Render for Home {
                                     ),
                                 )
                             })
-                            .child(crate::code::icon_button("remove", "登録解除").on_click(
-                                cx.listener(move |_, _, _, cx| {
-                                    cx.stop_propagation();
-                                    AppState::unregister(cx, &path_for_remove);
-                                    cx.notify();
-                                }),
-                            ))
+                            .child(
+                                // 普段は隠し、行に乗せたときだけ出す
+                                div().invisible().group_hover("repo", |s| s.visible()).child(
+                                    crate::code::icon_button("remove", "登録解除").on_click(
+                                        cx.listener(move |_, _, _, cx| {
+                                            cx.stop_propagation();
+                                            AppState::unregister(cx, &path_for_remove);
+                                            cx.notify();
+                                        }),
+                                    ),
+                                ),
+                            )
                     })),
             )
     }

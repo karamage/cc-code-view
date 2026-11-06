@@ -18,9 +18,9 @@ pub enum Lod {
 }
 
 pub fn lod(zoom: f32) -> Lod {
-    if zoom < 0.7 {
+    if zoom < 1.0 {
         Lod::Far
-    } else if zoom < 2.2 {
+    } else if zoom < 2.6 {
         Lod::Mid
     } else {
         Lod::Near

@@ -8,6 +8,45 @@ use std::collections::HashMap;
 /// 星座の形を作る星の数。全部をつなぐと毛玉になる。
 const FIGURE_STARS: usize = 10;
 
+/// 全景で名前を出す価値のないファイル。
+fn is_noise(path: &str, binary: bool) -> bool {
+    let name = path.rsplit('/').next().unwrap_or(path);
+    binary
+        || name.ends_with(".lock")
+        || matches!(name, "package-lock.json" | "pnpm-lock.yaml" | "go.sum" | ".gitignore" | ".DS_Store")
+        || name.starts_with("LICENSE")
+        || [".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".icns", ".webp", ".snap", ".map"]
+            .iter()
+            .any(|ext| name.ends_with(ext))
+}
+
+/// AI が割り当てなかったファイルを、同じディレクトリか最上位ディレクトリの多数派に寄せる。
+/// 受け皿の星座が最大になると、解析の結果が失敗に見えるため。
+pub fn absorb_unassigned(paths: &[&str], assignment: &mut [usize], modules: usize) {
+    let parent = |p: &str, depth: Option<usize>| -> String {
+        let segs: Vec<&str> = p.split('/').collect();
+        let keep = depth.unwrap_or(segs.len().saturating_sub(1)).min(segs.len().saturating_sub(1));
+        segs[..keep].join("/")
+    };
+    for depth in [None, Some(1)] {
+        let mut votes: HashMap<String, HashMap<usize, u32>> = HashMap::new();
+        for (p, m) in paths.iter().zip(assignment.iter()) {
+            if *m < modules {
+                *votes.entry(parent(p, depth)).or_default().entry(*m).or_default() += 1;
+            }
+        }
+        for (p, m) in paths.iter().zip(assignment.iter_mut()) {
+            let dir = parent(p, depth);
+            if *m >= modules && !dir.is_empty()
+                && let Some(counts) = votes.get(&dir)
+                && let Some((best, _)) = counts.iter().max_by_key(|(id, n)| (**n, std::cmp::Reverse(**id)))
+            {
+                *m = *best;
+            }
+        }
+    }
+}
+
 pub struct Constellation {
     pub name: SharedString,
     pub center: (f32, f32),
@@ -28,13 +67,19 @@ pub struct Sky {
     /// ファイル単位の依存
     pub edges: Vec<(u32, u32)>,
     pub labels: Vec<SharedString>,
-    /// 星座ごとの最大の星。ラベルの間引きに使う
+    /// 星座の中の順位。ラベルの間引きに使う
     pub rank: Vec<u32>,
+    /// 星座の形を作る星。ほかは背景の塵として淡く描く
+    pub figure: Vec<bool>,
+    /// 名前を出す価値のある星
+    pub labeled: Vec<bool>,
     pub bounds: (f32, f32, f32, f32),
 }
 
 pub fn build_sky(index: &RepoIndex, modules: &[Module]) -> Sky {
-    let assignment = assign_files(&index.files, modules);
+    let mut assignment = assign_files(&index.files, modules);
+    let paths: Vec<&str> = index.files.iter().map(|f| f.path.as_str()).collect();
+    absorb_unassigned(&paths, &mut assignment, modules.len());
     let stars = layout(&index.files, &assignment, modules.len());
 
     let slots = modules.len() + 1;
@@ -47,16 +92,21 @@ pub fn build_sky(index: &RepoIndex, modules: &[Module]) -> Sky {
     let mut slot_to_constellation = vec![u32::MAX; slots];
     let mut figure_lines = Vec::new();
     let mut rank = vec![u32::MAX; stars.len()];
+    let mut figure_flags = vec![false; stars.len()];
+    let labeled: Vec<bool> =
+        index.files.iter().map(|f| !is_noise(&f.path, f.binary)).collect();
     let mut bounds = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
 
     for (slot, list) in members.iter_mut().enumerate() {
         if list.is_empty() {
             continue;
         }
+        // 名前を出す価値のあるファイルから順に、形と順位を決める
         list.sort_by(|a, b| {
-            stars[*b].radius.total_cmp(&stars[*a].radius).then_with(|| {
-                index.files[*a].path.cmp(&index.files[*b].path)
-            })
+            labeled[*b]
+                .cmp(&labeled[*a])
+                .then(stars[*b].radius.total_cmp(&stars[*a].radius))
+                .then_with(|| index.files[*a].path.cmp(&index.files[*b].path))
         });
         let n = list.len() as f32;
         let cx = list.iter().map(|i| stars[*i].x).sum::<f32>() / n;
@@ -70,6 +120,9 @@ pub fn build_sky(index: &RepoIndex, modules: &[Module]) -> Sky {
         }
         // 各星を、自分より大きく最も近い星へつなぐ
         let figure = &list[..list.len().min(FIGURE_STARS)];
+        for i in figure {
+            figure_flags[*i] = true;
+        }
         for k in 1..figure.len() {
             let a = stars[figure[k]];
             let nearest = figure[..k]
@@ -87,7 +140,7 @@ pub fn build_sky(index: &RepoIndex, modules: &[Module]) -> Sky {
         }
         slot_to_constellation[slot] = constellations.len() as u32;
         constellations.push(Constellation {
-            name: modules.get(slot).map_or("その他".into(), |m| m.name.clone().into()),
+            name: modules.get(slot).map_or("未分類".into(), |m| m.name.clone().into()),
             center: (cx, cy),
             extent,
             file_count: list.len(),
@@ -113,13 +166,28 @@ pub fn build_sky(index: &RepoIndex, modules: &[Module]) -> Sky {
     module_links.sort_by_key(|l| (std::cmp::Reverse(l.2), l.0, l.1));
     module_links.truncate(constellations.len() * 3);
 
+    // 同じ名前が複数あれば、親のディレクトリを添えて見分けられるようにする
+    let base = |p: &str| p.rsplit('/').next().unwrap_or(p).to_string();
+    let mut name_count: HashMap<String, u32> = HashMap::new();
+    for f in &index.files {
+        *name_count.entry(base(&f.path)).or_default() += 1;
+    }
     let labels = index
         .files
         .iter()
-        .map(|f| SharedString::from(f.path.rsplit('/').next().unwrap_or(&f.path).to_string()))
+        .map(|f| {
+            let name = base(&f.path);
+            if name_count[&name] > 1 {
+                let mut segs = f.path.rsplit('/');
+                let (file, dir) = (segs.next().unwrap_or(""), segs.next());
+                SharedString::from(dir.map_or(name.clone(), |d| format!("{d}/{file}")))
+            } else {
+                SharedString::from(name)
+            }
+        })
         .collect();
 
-    Sky { stars, constellations, figure_lines, module_links, edges: index.edges.clone(), labels, rank, bounds }
+    Sky { stars, constellations, figure_lines, module_links, edges: index.edges.clone(), labels, rank, figure: figure_flags, labeled, bounds }
 }
 
 #[cfg(test)]
@@ -145,12 +213,32 @@ mod tests {
         };
         let sky = build_sky(&index, &[module("a"), module("b")]);
         assert_eq!(sky.constellations.len(), 3);
-        assert_eq!(sky.constellations[2].name, "その他");
+        assert_eq!(sky.constellations[2].name, "未分類");
         assert_eq!(sky.constellations[2].module_index, None);
         // 同じ星座の中の依存は星座間のリンクにならない
         assert_eq!(sky.module_links, [(0, 1, 2)]);
         assert_eq!(sky.figure_lines.len(), 1);
         assert_eq!(sky.rank[1], 0);
+    }
+
+    #[test]
+    fn unassigned_files_join_the_majority_of_their_directory() {
+        let paths = ["a/b/x.rs", "a/b/y.rs", "a/b/z.rs", "a/c/w.rs", "q/r.rs", "top.txt"];
+        let mut assignment = [1, 1, 9, 9, 9, 9];
+        absorb_unassigned(&paths, &mut assignment, 2);
+        assert_eq!(assignment, [1, 1, 1, 1, 9, 9]);
+    }
+
+    #[test]
+    fn noise_is_not_labeled_and_duplicate_names_show_their_parent() {
+        let files = vec![file("a/index.ts", 10), file("b/index.ts", 10), file("a/bun.lock", 9000)];
+        let index = RepoIndex { files, ..Default::default() };
+        let sky = build_sky(&index, &[module("a"), module("b")]);
+        assert_eq!(sky.labels[0], "a/index.ts");
+        assert_eq!(sky.labels[2], "bun.lock");
+        assert_eq!(sky.labeled, [true, true, false]);
+        // 大きくても、ロックファイルは星座の主役にしない
+        assert_eq!(sky.rank[2], 1);
     }
 
     #[test]

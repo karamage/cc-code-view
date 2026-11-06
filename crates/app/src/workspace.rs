@@ -94,6 +94,7 @@ pub struct Workspace {
     cancel: Arc<AtomicBool>,
     deep_cancel: Arc<AtomicBool>,
     recent_reads: Vec<usize>,
+    reads_total: usize,
     demo_applied: bool,
 }
 
@@ -189,6 +190,7 @@ impl Workspace {
             cancel: Default::default(),
             deep_cancel: Default::default(),
             recent_reads: Vec::new(),
+            reads_total: 0,
             demo_applied: false,
         }
     }
@@ -256,6 +258,10 @@ impl Workspace {
     }
 
     fn follow(&mut self, path: String, cx: &mut Context<Self>) {
+        // ツアー中のカメラは停留所の移動が決める
+        if self.tour.is_some() {
+            return;
+        }
         let Some(l) = &self.loaded else { return };
         if let Some(i) = l.file_at.get(&path).copied() {
             l.map.update(cx, |m, cx| {
@@ -374,6 +380,7 @@ impl Workspace {
             return;
         }
         self.state = next;
+        self.reads_total = 0;
         self.show_reanalyze = false;
         let cancel = Arc::new(AtomicBool::new(false));
         self.cancel = cancel.clone();
@@ -393,6 +400,7 @@ impl Workspace {
             && let Some(i) = l.file_at.get(&label).copied()
         {
             self.recent_reads.push(i);
+            self.reads_total += 1;
             let start = self.recent_reads.len().saturating_sub(5);
             self.recent_reads.drain(..start);
             let lit = self.recent_reads.clone();
@@ -454,11 +462,11 @@ impl Workspace {
                     let band = line.map(|l| (l + 1, l + 1));
                     this.open_path(&path, line.unwrap_or(0), band, cx);
                 }
-                PaletteEvent::Preview(path) => {
-                    if let Some(l) = &this.loaded
-                        && let Some(i) = l.file_at.get(path).copied()
-                    {
-                        l.map.update(cx, |m, cx| m.set_lit(vec![i], cx));
+                PaletteEvent::Preview(paths) => {
+                    if let Some(l) = &this.loaded {
+                        let lit: Vec<usize> =
+                            paths.iter().filter_map(|p| l.file_at.get(p).copied()).collect();
+                        l.map.update(cx, |m, cx| m.set_lit(lit, cx));
                     }
                 }
                 PaletteEvent::Dismiss => this.close_palette(window, cx),
@@ -506,11 +514,6 @@ impl Workspace {
         };
         let position = tour.position();
         let visited: Vec<String> = tour.visited().into_iter().map(str::to_string).collect();
-        if let Some(l) = &self.loaded {
-            let route: Vec<usize> =
-                visited.iter().filter_map(|p| l.file_at.get(p).copied()).collect();
-            l.map.update(cx, |m, cx| m.set_route(route, cx));
-        }
         AppState::set_tour_position(cx, &self.repo, position);
         self.open_path(
             &stop.path,
@@ -518,7 +521,21 @@ impl Workspace {
             Some((stop.start_line, stop.end_line)),
             cx,
         );
-        self.follow(stop.path, cx);
+        if let Some(l) = &self.loaded {
+            let route: Vec<usize> =
+                visited.iter().filter_map(|p| l.file_at.get(p).copied()).collect();
+            let (previous, current) = (
+                route.len().checked_sub(2).map(|i| route[i]),
+                route.last().copied(),
+            );
+            l.map.update(cx, |m, cx| {
+                m.set_route(route.clone(), cx);
+                if let Some(current) = current {
+                    m.set_selected(Some(current), cx);
+                    m.fly_between(previous, current, cx);
+                }
+            });
+        }
     }
 
     fn end_tour(&mut self, cx: &mut Context<Self>) {
@@ -626,8 +643,17 @@ impl Workspace {
             .map(|f| f.path.clone());
         match demo {
             DemoState::Analyzing => {
-                let lit: Vec<usize> = (0..l.index.files.len()).step_by(11).take(4).collect();
                 let activity = biggest.clone().unwrap_or_default();
+                // 読んでいるファイルと、その前に読んだファイルを光らせる
+                let mut order: Vec<usize> = (0..l.index.files.len())
+                    .filter(|i| !l.index.files[*i].binary)
+                    .collect();
+                order.sort_by_key(|i| std::cmp::Reverse(l.index.files[*i].lines));
+                let mut lit: Vec<usize> = order.into_iter().step_by(9).take(4).collect();
+                if let Some(i) = l.file_at.get(&activity) {
+                    lit.push(*i);
+                }
+                self.reads_total = 23;
                 l.map.update(cx, |m, cx| m.set_lit(lit, cx));
                 self.state = AnalysisState::Running {
                     model: ModelChoice::Sonnet,
@@ -659,7 +685,7 @@ impl Workspace {
             }
             DemoState::Error => {
                 self.state = AnalysisState::Failed {
-                    message: RunError::LimitReached("5 時間の利用枠を使い切りました。".into()).to_string(),
+                    message: RunError::LimitReached("しばらく待ってからお試しください。".into()).to_string(),
                     can_retry: true,
                 };
             }
@@ -674,6 +700,10 @@ impl Workspace {
         let stale = self.loaded.as_ref().is_some_and(|l| {
             l.analysis.as_ref().is_some_and(|a| a.head != l.index.head)
         });
+        let can_tour = self
+            .loaded
+            .as_ref()
+            .is_some_and(|l| l.analysis.as_ref().is_some_and(|a| !a.tour.is_empty()));
         let sha = self
             .loaded
             .as_ref()
@@ -732,6 +762,11 @@ impl Workspace {
                 )
             })
             .child(div().flex_1())
+            .when(can_tour, |d| {
+                d.child(icon_button("title-tour", "ツアー  T").on_click(cx.listener(
+                    |this, _, window, cx| this.on_tour_toggle(&TourToggle, window, cx),
+                )))
+            })
             .child(icon_button("open-files", "ファイル  ⌘P").on_click(cx.listener(
                 |this, _, window, cx| this.open_palette(PaletteMode::Files, window, cx),
             )))
@@ -798,6 +833,17 @@ impl Workspace {
                         .child(div().text_color(theme::text()).child("AI 機能を使えません"))
                         .child(div().text_size(px(12.)).text_color(theme::text_muted()).child(message)),
                 )
+                .child(
+                    icon_button("install-claude", "入手方法を開く").on_click(|_, _, cx| {
+                        cx.open_url("https://claude.com/claude-code");
+                    }),
+                )
+                .child(primary("recheck", "再確認".into()).on_click(cx.listener(|this, _, _, cx| {
+                    this.state = AnalysisState::Idle;
+                    cx.global_mut::<AppState>().claude_status = ClaudeStatus::Checking;
+                    crate::state::check_claude(cx);
+                    cx.notify();
+                })))
                 .into_any_element(),
             AnalysisState::Running { model, activity, started } => {
                 let secs = started.elapsed().as_secs();
@@ -825,7 +871,12 @@ impl Workspace {
                             .font_family(theme::CODE_FONT)
                             .text_size(px(12.))
                             .text_color(theme::text_muted())
-                            .child(format!("{:02}:{:02}", secs / 60, secs % 60)),
+                            .child(format!(
+                                "{} 件  {:02}:{:02}",
+                                self.reads_total,
+                                secs / 60,
+                                secs % 60
+                            )),
                     )
                     .child(
                         icon_button("cancel-analysis", "中断")
@@ -837,11 +888,23 @@ impl Workspace {
                 .child(div().flex_none().size(px(7.)).rounded_full().bg(theme::danger()))
                 .child(
                     div()
-                        .max_w(px(420.))
-                        .text_size(px(12.5))
-                        .line_height(px(18.))
-                        .text_color(theme::text())
-                        .child(message),
+                        .flex()
+                        .flex_col()
+                        .gap(px(2.))
+                        .max_w(px(340.))
+                        .child(
+                            div()
+                                .text_size(px(12.5))
+                                .line_height(px(18.))
+                                .text_color(theme::text())
+                                .child(message),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(11.5))
+                                .text_color(theme::text_muted())
+                                .child("星図とコードはこのまま使えます。別のモデルでも試せます。"),
+                        ),
                 )
                 .child(picker(cx))
                 .when(can_retry, |d| {
@@ -1162,7 +1225,18 @@ impl Workspace {
                 .absolute()
                 .top(px(20.))
                 .left(px(22.))
-                .child(paragraph(&analysis.overview, 330.0, 13.5, 23.0, theme::text(), window))
+                .w(px(318.))
+                .flex()
+                .flex_col()
+                .gap(px(8.))
+                .child(
+                    div()
+                        .text_size(px(11.))
+                        .font_family(theme::CODE_FONT)
+                        .text_color(theme::teal())
+                        .child("このリポジトリ"),
+                )
+                .child(paragraph(&analysis.overview, 318.0, 15.0, 25.0, theme::white(), window))
                 .into_any_element(),
         )
     }
@@ -1188,7 +1262,7 @@ impl Workspace {
             None => {
                 let total: u64 = l.index.files.iter().map(|f| f.lines as u64).sum();
                 format!(
-                    "{} files · {} lines · 星座 {}　　大きさ = コード量　明るさ = 変更頻度",
+                    "{} files · {} lines · 星座 {}　　星を押すとコード　星座名を押すと解説　⌘ + スクロールで拡大",
                     group_digits(l.index.files.len() as u64),
                     group_digits(total),
                     sky.constellations.len()
@@ -1276,6 +1350,7 @@ impl Render for Workspace {
         let overview = self.render_overview(window);
         let stats = self.render_stats(cx);
         let touring = self.tour.is_some();
+        let deep_open = self.deep.is_some();
         let code_open = self.code_open;
         let l = self.loaded.as_ref().expect("上で確認した");
         let (map, code) = (l.map.clone(), l.code.clone());
@@ -1297,7 +1372,7 @@ impl Render for Workspace {
                         .child(map)
                         .children(overview)
                         .children(stats)
-                        .when(!touring, |d| {
+                        .when(!touring && !code_open && !deep_open, |d| {
                             d.child(
                                 div()
                                     .absolute()
