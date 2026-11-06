@@ -61,6 +61,22 @@ impl Selection {
     }
 }
 
+/// 長いパスは中央を省く。先頭と、見分けるのに要るファイル名を残す。
+pub fn middle_ellipsis(text: &str, max_chars: usize) -> String {
+    let count = text.chars().count();
+    if count <= max_chars {
+        return text.to_string();
+    }
+    let keep = max_chars.saturating_sub(1);
+    // ファイル名が入るなら丸ごと残す
+    let name = text.rsplit('/').next().unwrap_or(text).chars().count();
+    let tail = name.clamp(keep * 2 / 3, keep.saturating_sub(4).max(keep * 2 / 3));
+    let head = keep - tail;
+    let start: String = text.chars().take(head).collect();
+    let end: String = text.chars().skip(count - tail).collect();
+    format!("{start}…{end}")
+}
+
 /// 一致箇所が見えるよう、前後を切り詰めた文字列と、その中の一致範囲を返す。
 fn snippet_around(
     text: &str,
@@ -287,8 +303,13 @@ impl Palette {
                     .cursor_pointer()
                     .text_size(px(12.5))
                     .font_family(theme::CODE_FONT)
-                    .when(active, |d| d.bg(theme::alpha(theme::violet(), 0.16)))
-                    .hover(|h| h.bg(theme::alpha(theme::violet(), 0.1)))
+                    .border_l_2()
+                    .border_color(gpui::transparent_black())
+                    // 選択は左の線と強い地で示す。カーソルの下はごく淡くして、選択と紛れないように
+                    .when(active, |d| {
+                        d.bg(theme::alpha(theme::violet(), 0.24)).border_color(theme::teal())
+                    })
+                    .when(!active, |d| d.hover(|h| h.bg(theme::alpha(theme::white(), 0.035))))
                     .on_click(cx.listener(move |this, _, _, cx| this.open_row(i, cx)));
                 match &self.rows[i] {
                     Row::File { path, matched } => {
@@ -316,7 +337,7 @@ impl Palette {
                         let first_in_file = i == 0
                             || !matches!(&self.rows[i - 1], Row::Line { hit: prev } if prev.path == hit.path);
                         let location = if first_in_file {
-                            format!("{}:{}", hit.path, hit.line + 1)
+                            middle_ellipsis(&format!("{}:{}", hit.path, hit.line + 1), 30)
                         } else {
                             format!(":{}", hit.line + 1)
                         };
@@ -474,6 +495,15 @@ mod tests {
         assert_eq!(text, "短い needle です");
         assert_eq!(&text[range.unwrap()], "needle");
         assert_eq!(snippet_around("abc", "zzz", 10, 40), ("abc".to_string(), None));
+    }
+
+    #[test]
+    fn long_paths_keep_their_file_name() {
+        assert_eq!(middle_ellipsis("short.rs", 30), "short.rs");
+        let got = middle_ellipsis("src/client/components/RiskScoreCard.tsx:12", 30);
+        assert_eq!(got.chars().count(), 30);
+        assert!(got.contains('…'));
+        assert!(got.ends_with("RiskScoreCard.tsx:12"), "{got}");
     }
 
     #[test]

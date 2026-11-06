@@ -261,7 +261,9 @@ impl Workspace {
     fn update_sky_mood(&self, cx: &mut Context<Self>) {
         let Some(l) = &self.loaded else { return };
         let dim = match self.state {
-            AnalysisState::Failed { .. } | AnalysisState::Unavailable(_) => 0.42,
+            // 星図は使えるので、失敗しても暗くしすぎない
+            AnalysisState::Failed { .. } => 0.8,
+            AnalysisState::Unavailable(_) => 1.0,
             AnalysisState::Running { .. } => 0.62,
             AnalysisState::Idle => 1.0,
         };
@@ -1005,7 +1007,20 @@ impl Workspace {
                     .into_any_element()
             }
             AnalysisState::Idle if !has_analysis && !self.show_reanalyze => dock()
-                .child(picker(cx))
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(5.))
+                        .child(picker(cx))
+                        .child(
+                            div()
+                                .pl(px(4.))
+                                .text_size(px(11.5))
+                                .text_color(theme::text_muted())
+                                .child(current.hint()),
+                        ),
+                )
                 .child(
                     primary(
                         "start-analysis",
@@ -1023,7 +1038,20 @@ impl Workspace {
                 let show = self.show_reanalyze;
                 dock()
                     .when(show, |d| {
-                        d.child(picker(cx))
+                        d.child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap(px(5.))
+                                .child(picker(cx))
+                                .child(
+                                    div()
+                                        .pl(px(4.))
+                                        .text_size(px(11.5))
+                                        .text_color(theme::text_muted())
+                                        .child(current.hint()),
+                                ),
+                        )
                             .child(primary("run-reanalyze", "再解析を実行  ⏎".into()).on_click(
                                 cx.listener(|this, _, _, cx| this.run_analysis(cx)),
                             ))
@@ -1329,15 +1357,6 @@ impl Workspace {
                     .cursor_pointer()
                     .hover(|h| h.bg(theme::alpha(theme::violet(), 0.14)))
                     .child(
-                        // 行の下地に規模を示す
-                        div()
-                            .flex_none()
-                            .w(px(3.0 + share * 34.0))
-                            .h(px(2.))
-                            .rounded_full()
-                            .bg(theme::violet()),
-                    )
-                    .child(
                         div()
                             .flex_1()
                             .min_w_0()
@@ -1348,12 +1367,25 @@ impl Workspace {
                             .child(c.name.clone()),
                     )
                     .child(
+                        // 名前の列を揃えるため、規模は右に一定の幅で示す
+                        div().flex_none().w(px(36.)).flex().justify_end().child(
+                            div()
+                                .w(px(2.0 + share * 34.0))
+                                .h(px(2.))
+                                .rounded_full()
+                                .bg(theme::violet()),
+                        ),
+                    )
+                    .child(
                         div()
                             .flex_none()
+                            .w(px(46.))
+                            .flex()
+                            .justify_end()
                             .text_size(px(11.))
                             .font_family(theme::CODE_FONT)
                             .text_color(theme::text_muted())
-                            .child(c.file_count.to_string()),
+                            .child(group_digits(c.lines)),
                     )
                     .on_click(cx.listener(move |this, _, _, cx| this.open_constellation(ci, cx)))
             })
@@ -1386,9 +1418,11 @@ impl Workspace {
                     div()
                         .mt(px(22.))
                         .mb(px(4.))
+                        .flex()
+                        .justify_between()
                         .text_size(px(11.))
-                        .text_color(theme::teal())
-                        .child("星座"),
+                        .child(div().text_color(theme::teal()).child("星座"))
+                        .child(div().text_color(theme::text_muted()).child("行数")),
                 )
                 .children(rows)
                 .when(hidden > 0, |d| {
@@ -1435,9 +1469,9 @@ impl Workspace {
         let legend = hovered.is_none();
         // AI を使えないときは、解説の案内を出さない
         let hint = if matches!(self.state, AnalysisState::Unavailable(_)) {
-            "星でコード  ⌘ + スクロールで拡大"
+            "星をクリックでコードを開く　⌘ + スクロールで拡大"
         } else {
-            "星でコード  星座名で解説  ⌘ + スクロールで拡大"
+            "星をクリックでコード　星座をクリックで解説　⌘ + スクロールで拡大"
         };
         Some(
             div()

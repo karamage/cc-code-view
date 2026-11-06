@@ -105,11 +105,63 @@ pub struct Sky {
     pub bounds: (f32, f32, f32, f32),
 }
 
+/// 依存でつながる星座を引き寄せ、重なりは押し戻す。乱数を使わず、同じ入力から同じ結果を返す。
+/// 位置に意味を持たせ、文字を読む前に構造が見えるようにする。
+pub fn relax_centers(centers: &mut [(f32, f32)], radii: &[f32], links: &[(u32, u32, u32)]) {
+    const ITERATIONS: usize = 160;
+    const GAP: f32 = 96.0;
+    let max_links = links.iter().map(|l| l.2).max().unwrap_or(1) as f32;
+    let original = centers.to_vec();
+    for step in 0..ITERATIONS {
+        let cooling = 1.0 - step as f32 / ITERATIONS as f32;
+        let mut moves = vec![(0.0f32, 0.0f32); centers.len()];
+        for &(a, b, n) in links {
+            let (a, b) = (a as usize, b as usize);
+            let (dx, dy) = (centers[b].0 - centers[a].0, centers[b].1 - centers[a].1);
+            let distance = (dx * dx + dy * dy).sqrt().max(1.0);
+            let rest = radii[a] + radii[b] + GAP;
+            let pull = ((distance - rest).max(0.0) / distance) * 0.02
+                * (n as f32 / max_links).sqrt()
+                * cooling;
+            moves[a].0 += dx * pull;
+            moves[a].1 += dy * pull;
+            moves[b].0 -= dx * pull;
+            moves[b].1 -= dy * pull;
+        }
+        // 元の並びへ弱く戻し、全体が 1 点に潰れないようにする
+        for (i, m) in moves.iter_mut().enumerate() {
+            m.0 += (original[i].0 - centers[i].0) * 0.012;
+            m.1 += (original[i].1 - centers[i].1) * 0.012;
+        }
+        for (c, m) in centers.iter_mut().zip(&moves) {
+            c.0 += m.0;
+            c.1 += m.1;
+        }
+        // 重なりの解消は最後まで強く効かせる
+        for _ in 0..2 {
+            for i in 0..centers.len() {
+                for j in i + 1..centers.len() {
+                    let (dx, dy) = (centers[j].0 - centers[i].0, centers[j].1 - centers[i].1);
+                    let distance = (dx * dx + dy * dy).sqrt().max(0.01);
+                    let need = radii[i] + radii[j] + GAP;
+                    if distance < need {
+                        let push = (need - distance) / distance * 0.5;
+                        centers[i].0 -= dx * push;
+                        centers[i].1 -= dy * push;
+                        centers[j].0 += dx * push;
+                        centers[j].1 += dy * push;
+                    }
+                }
+            }
+        }
+    }
+}
+
 pub fn build_sky(index: &RepoIndex, modules: &[Module]) -> Sky {
     let mut assignment = assign_files(&index.files, modules);
     let paths: Vec<&str> = index.files.iter().map(|f| f.path.as_str()).collect();
     absorb_unassigned(&paths, &mut assignment, modules.len());
-    let stars = layout(&index.files, &assignment, modules.len());
+    let mut stars = layout(&index.files, &assignment, modules.len());
 
     let slots = modules.len() + 1;
     let mut members: Vec<Vec<usize>> = vec![Vec::new(); slots];
@@ -199,9 +251,28 @@ pub fn build_sky(index: &RepoIndex, modules: &[Module]) -> Sky {
     let mut module_links: Vec<(u32, u32, u32)> =
         link_counts.into_iter().map(|((a, b), n)| (a, b, n)).collect();
     // 全部を描くと毛玉になる。太い順に、星座の数の 3 倍までに絞る
+    // HashMap の順序に左右されないよう、同数なら添字で並べる
     module_links.sort_by_key(|l| (std::cmp::Reverse(l.2), l.0, l.1));
     module_links.truncate(constellations.len() * 3);
 
+    // 太い依存でつながる星座を近づけて、星も一緒に動かす
+    let mut centers: Vec<(f32, f32)> = constellations.iter().map(|c: &Constellation| c.center).collect();
+    let before = centers.clone();
+    let radii: Vec<f32> = constellations.iter().map(|c| c.extent).collect();
+    relax_centers(&mut centers, &radii, &module_links);
+    for (i, s) in stars.iter_mut().enumerate() {
+        let c = star_constellation[i] as usize;
+        s.x += centers[c].0 - before[c].0;
+        s.y += centers[c].1 - before[c].1;
+    }
+    for (c, center) in constellations.iter_mut().zip(&centers) {
+        c.center = *center;
+    }
+    if !stars.is_empty() {
+        bounds = stars.iter().fold((f32::MAX, f32::MAX, f32::MIN, f32::MIN), |b, s| {
+            (b.0.min(s.x), b.1.min(s.y), b.2.max(s.x), b.3.max(s.y))
+        });
+    }
     // 同じ名前が複数あれば、親のディレクトリを添えて見分けられるようにする
     let base = |p: &str| p.rsplit('/').next().unwrap_or(p).to_string();
     let mut name_count: HashMap<String, u32> = HashMap::new();
@@ -313,6 +384,24 @@ mod tests {
         let index = RepoIndex { files, ..Default::default() };
         let sky = build_sky(&index, &[module("a")]);
         assert_eq!(sky.rank[1], 0);
+    }
+
+    #[test]
+    fn linked_constellations_move_closer_without_overlapping() {
+        let mut centers = vec![(0.0, 0.0), (800.0, 0.0), (-400.0, 300.0)];
+        let radii = [50.0, 50.0, 50.0];
+        relax_centers(&mut centers, &radii, &[(0, 1, 10)]);
+        let d = |a: (f32, f32), b: (f32, f32)| ((a.0 - b.0).powi(2) + (a.1 - b.1).powi(2)).sqrt();
+        assert!(d(centers[0], centers[1]) < 800.0, "{centers:?}");
+        for i in 0..3 {
+            for j in i + 1..3 {
+                assert!(d(centers[i], centers[j]) >= 190.0, "{centers:?}");
+            }
+        }
+        // 同じ入力からは同じ結果になる
+        let mut again = vec![(0.0, 0.0), (800.0, 0.0), (-400.0, 300.0)];
+        relax_centers(&mut again, &radii, &[(0, 1, 10)]);
+        assert_eq!(centers, again);
     }
 
     #[test]

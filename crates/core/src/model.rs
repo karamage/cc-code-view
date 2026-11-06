@@ -104,6 +104,16 @@ impl ModelChoice {
         }
     }
 
+    /// 選ぶときの目安。
+    pub fn hint(self) -> &'static str {
+        match self {
+            ModelChoice::Default => "Claude Code の設定に従います",
+            ModelChoice::Fable | ModelChoice::Opus => "じっくり読みます。利用枠を多く使います",
+            ModelChoice::Sonnet => "速さと質のバランスを取ります",
+            ModelChoice::Haiku => "速く読みます。利用枠をあまり使いません",
+        }
+    }
+
     pub fn label(self) -> &'static str {
         match self {
             ModelChoice::Default => "Claude の既定",

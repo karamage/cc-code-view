@@ -400,7 +400,7 @@ impl Render for Home {
                                             .text_color(theme::text_muted())
                                             .overflow_hidden()
                                             .whitespace_nowrap()
-                                            .child(repo.path.display().to_string()),
+                                            .child(crate::palette::middle_ellipsis(&repo.path.display().to_string(), 46)),
                                     )
                                     .child(
                                         div()

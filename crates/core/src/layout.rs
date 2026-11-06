@@ -38,14 +38,25 @@ fn jitter(path: &str) -> (f32, f32) {
 
 /// 螺旋上の位置を星に割り当てる。大きな星が中心に固まると塊に見えるので、
 /// 上位の星を全体へ散らし、残りで隙間を埋める。
-fn spread_slots(count: usize) -> Vec<usize> {
+///
+/// `seed` で上位の星の位置を少しずらし、星座ごとに違う形にする。
+fn spread_slots(count: usize, seed: f32) -> Vec<usize> {
     const LEADING: usize = 10;
     let leading = LEADING.min(count);
     let mut taken = vec![false; count];
     let mut slots = Vec::with_capacity(count);
     for i in 0..leading {
-        let slot = if leading > 1 { i * (count - 1) / (leading - 1) } else { 0 };
-        // 面積が一様になるよう、中心から外へ順に使う
+        let stride = if leading > 1 { (count - 1) as f32 / (leading - 1) as f32 } else { 0.0 };
+        // 1 区間の中で星座ごとにずらす。端は全体の広がりを保つため動かさない
+        let shift = if i == 0 || i + 1 == leading {
+            0.0
+        } else {
+            (((i as f32 + 1.0) * 7.31 + seed * 97.0).fract() - 0.5) * stride * 0.85
+        };
+        let mut slot = ((i as f32 * stride + shift).round() as usize).min(count - 1);
+        while taken[slot] {
+            slot = (slot + 1) % count;
+        }
         taken[slot] = true;
         slots.push(slot);
     }
@@ -87,9 +98,13 @@ pub fn layout(files: &[FileEntry], assignment: &[usize], module_count: usize) ->
             list.iter().map(|i| star_radius(files[*i].lines)).sum::<f32>() / list.len() as f32;
         let spacing = mean.max(1.4) * 4.4;
         let mut extent = 0.0f32;
-        let slots = spread_slots(list.len());
+        let (seed, spin) = jitter(&files[list[0]].path);
+        let slots = spread_slots(list.len(), seed);
         for (k, i) in list.iter().enumerate() {
             let (mut x, mut y) = phyllotaxis(slots[k], spacing);
+            // 星座ごとに回して、同じ型の繰り返しに見えないようにする
+            let turn = spin * std::f32::consts::TAU;
+            (x, y) = (x * turn.cos() - y * turn.sin(), x * turn.sin() + y * turn.cos());
             // 螺旋の規則性を崩して、自然な星の散らばりにする
             let (ja, jb) = jitter(&files[*i].path);
             let angle = ja * std::f32::consts::TAU;
@@ -172,7 +187,7 @@ mod tests {
     #[test]
     fn slots_use_every_position_once_and_spread_the_leaders() {
         for count in [0, 1, 2, 9, 10, 11, 200] {
-            let mut slots = spread_slots(count);
+            let mut slots = spread_slots(count, 0.37);
             let leaders: Vec<usize> = slots.iter().take(10).copied().collect();
             slots.sort_unstable();
             assert_eq!(slots, (0..count).collect::<Vec<_>>(), "{count}");
@@ -182,6 +197,8 @@ mod tests {
                 assert!(leaders[4] > 50);
             }
         }
+        // 種が違えば形も変わる
+        assert_ne!(spread_slots(200, 0.1), spread_slots(200, 0.7));
     }
 
     #[test]

@@ -224,10 +224,11 @@ impl StarMap {
             extend(&mut bbox, prev.x, prev.y);
         }
         let (w, h) = self.vp();
-        const PADDING: f32 = 120.0;
+        const PADDING: f32 = 170.0;
         let zoom = ((w - PADDING) / (bbox.2 - bbox.0).max(1.0))
             .min((h - PADDING) / (bbox.3 - bbox.1).max(1.0))
-            .clamp(0.4, 2.6);
+            // 自動の移動では全ファイル名の表示まで寄らない。読みやすさを保つ
+            .clamp(0.4, 2.4);
         let center = ((bbox.0 + bbox.2) / 2.0, (bbox.1 + bbox.3) / 2.0);
         self.fly(Camera { center, zoom }, cx);
     }

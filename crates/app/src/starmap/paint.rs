@@ -223,11 +223,15 @@ pub fn paint_backdrop(
     });
 }
 
+const MINIMAP_W: f32 = 112.0;
+const MINIMAP_H: f32 = 74.0;
+const MINIMAP_MARGIN: f32 = 10.0;
+
 /// 全景の中の現在地を隅に描く。読んでいる間も全体を見失わないように。
 fn paint_minimap(origin: (f32, f32), vp: (f32, f32), f: &Frame<'_>, window: &mut Window) {
-    const W: f32 = 148.0;
-    const H: f32 = 96.0;
-    const MARGIN: f32 = 12.0;
+    const W: f32 = MINIMAP_W;
+    const H: f32 = MINIMAP_H;
+    const MARGIN: f32 = MINIMAP_MARGIN;
     let area = Bounds {
         origin: point(px(origin.0 + vp.0 - W - MARGIN), px(origin.1 + MARGIN)),
         size: size(px(W), px(H)),
@@ -405,8 +409,9 @@ pub fn paint(bounds: Bounds<Pixels>, f: &Frame<'_>, window: &mut Window, cx: &mu
                     lit_links.curve_to(point(px(q.0), px(q.1)), ctrl);
                     any_lit = true;
                 } else {
-                    let weight = (n as f32 / max_links).sqrt();
-                    let band = ((weight * BANDS as f32) as usize).min(BANDS - 1);
+                    // 主要な航路は上位の数本だけにする。全部が強いと何も伝わらない
+                    let strong = order < 4 && (n as f32 / max_links) > 0.4;
+                    let band = if strong { 2 } else if order < resting / 2 { 1 } else { 0 };
                     bands[band].move_to(point(px(p.0), px(p.1)));
                     bands[band].curve_to(point(px(q.0), px(q.1)), ctrl);
                     used[band] = true;
@@ -415,7 +420,8 @@ pub fn paint(bounds: Bounds<Pixels>, f: &Frame<'_>, window: &mut Window, cx: &mu
             let fade = if focus.is_some() { 0.45 } else { 1.0 };
             for (i, path) in bands.into_iter().enumerate() {
                 if used[i] && let Ok(path) = path.build() {
-                    let alpha = 0.05 + (i as f32 + 0.5) / BANDS as f32 * 0.14;
+                    // 太い依存を主要な航路として際立たせる
+                    let alpha = [0.07, 0.15, 0.42][i.min(2)];
                     window.paint_path(path, theme::alpha(theme::violet(), alpha * fade));
                 }
             }
@@ -552,10 +558,21 @@ pub fn paint(bounds: Bounds<Pixels>, f: &Frame<'_>, window: &mut Window, cx: &mu
         }
 
         // 停留所の印。通過した場所には番号を添える
-        for star in f.upcoming {
+        for (k, star) in f.upcoming.iter().enumerate() {
             let p = to_screen(f.positions[*star]);
             if on_screen(p, 8.0) {
-                ring(window, p, 4.5, theme::alpha(theme::teal(), 0.45));
+                let color = theme::alpha(theme::teal(), 0.55);
+                ring(window, p, 4.5, color);
+                text(
+                    window,
+                    cx,
+                    (f.route.len() + k + 1).to_string().into(),
+                    (p.0 - 15.0, p.1 - 7.0),
+                    10.0,
+                    color,
+                    FontWeight::NORMAL,
+                    false,
+                );
             }
         }
         let current_stop = f.route.last().copied();
@@ -580,8 +597,13 @@ pub fn paint(bounds: Bounds<Pixels>, f: &Frame<'_>, window: &mut Window, cx: &mu
         }
 
         // ラベル: 遠景は星座名、中景は主要ファイル、近景は全ファイル
+        // 現在地の小窓を障害物として、先に場所を取る
         let mut placed: Vec<(f32, f32, f32, f32)> = Vec::new();
-        let mut try_place = |x: f32, y: f32, w: f32, h: f32| {
+        if f.minimap {
+            let (w, h, m) = (MINIMAP_W, MINIMAP_H, MINIMAP_MARGIN);
+            placed.push((origin.0 + vp.0 - w - m * 2.0, origin.1, w + m * 2.0, h + m * 2.0));
+        }
+        fn place(placed: &mut Vec<(f32, f32, f32, f32)>, x: f32, y: f32, w: f32, h: f32) -> bool {
             let hit = placed.iter().any(|(px_, py, pw, ph)| {
                 x < px_ + pw && x + w > *px_ && y < py + ph && y + h > *py
             });
@@ -589,7 +611,7 @@ pub fn paint(bounds: Bounds<Pixels>, f: &Frame<'_>, window: &mut Window, cx: &mu
                 placed.push((x, y, w, h));
             }
             !hit
-        };
+        }
 
         // 光っている星が多いとき（検索結果）は、名前を出すと読めなくなる
         let lit_labels: &[usize] = if f.lit.len() <= 8 { f.lit } else { &[] };
@@ -602,7 +624,7 @@ pub fn paint(bounds: Bounds<Pixels>, f: &Frame<'_>, window: &mut Window, cx: &mu
             let x = if p.0 + r + w < origin.0 + vp.0 - 4.0 { p.0 + r } else { p.0 - r - w };
             // 重なるときは、選択中とカーソルの下だけを優先して出す
             let priority = f.selected == Some(i) || f.hovered == Some(i);
-            if !try_place(x - 4.0, p.1 - 10.0, w + 8.0, 20.0) && !priority {
+            if !place(&mut placed, x - 4.0, p.1 - 10.0, w + 8.0, 20.0) && !priority {
                 continue;
             }
             text(window, cx, label, (x, p.1 - 8.0), 12.0, theme::teal().into(), FontWeight::MEDIUM, false);
@@ -656,12 +678,12 @@ pub fn paint(bounds: Bounds<Pixels>, f: &Frame<'_>, window: &mut Window, cx: &mu
             if !pinned
                 && (!inside
                     || y < origin.1 + 4.0
-                    || !try_place(left - PAD, y - 3.0, w + PAD * 2.0, size_px * 1.3 + 6.0))
+                    || !place(&mut placed, left - PAD, y - 3.0, w + PAD * 2.0, size_px * 1.3 + 6.0))
             {
                 continue;
             }
             if pinned {
-                try_place(left - PAD, y - 3.0, w + PAD * 2.0, size_px * 1.3 + 6.0);
+                place(&mut placed, left - PAD, y - 3.0, w + PAD * 2.0, size_px * 1.3 + 6.0);
             }
             let strength = if f.focus_constellation.is_some() && !focused {
                 0.35
@@ -677,31 +699,48 @@ pub fn paint(bounds: Bounds<Pixels>, f: &Frame<'_>, window: &mut Window, cx: &mu
             text(window, cx, c.name.clone(), (center_x, y), size_px, name_color, weight, true);
         }
 
+        // 名前を置いたあとで、星を障害物に加える。ファイル名が星に重ならないように
+        for (i, s) in sky.stars.iter().enumerate() {
+            if !sky.figure[i] {
+                continue;
+            }
+            let p = to_screen(f.positions[i]);
+            if on_screen(p, 20.0) {
+                let r = star_screen_radius(s.radius, true, cam.zoom) + 2.0;
+                placed.push((p.0 - r, p.1 - r, r * 2.0, r * 2.0));
+            }
+        }
         if level != Lod::Far {
-            let keep = if level == Lod::Near { u32::MAX } else { 3 };
+            let keep = if level == Lod::Near { u32::MAX } else { 6 };
+            // 大きな星から順に名前を付ける
+            let mut candidates: Vec<usize> = (0..sky.stars.len())
+                .filter(|i| sky.rank[*i] < keep && sky.labeled[*i] && !lit.contains(i))
+                .filter(|i| f.selected != Some(*i) && f.hovered != Some(*i))
+                .filter(|i| on_screen(to_screen(f.positions[*i]), 0.0))
+                .collect();
+            candidates.sort_by_key(|i| sky.rank[*i]);
             let mut drawn = 0;
-            for (i, s) in sky.stars.iter().enumerate() {
-                let special = lit.contains(&i) || f.selected == Some(i) || f.hovered == Some(i);
-                if sky.rank[i] >= keep || !sky.labeled[i] || drawn > 160 || special {
-                    continue;
+            for i in candidates {
+                if drawn > 120 {
+                    break;
                 }
+                let s = sky.stars[i];
                 let p = to_screen(f.positions[i]);
                 let r = star_screen_radius(s.radius, sky.figure[i], cam.zoom);
-                if !on_screen(p, 0.0) {
-                    continue;
-                }
                 let label = sky.labels[i].clone();
                 let w = label.chars().map(|c| if c.is_ascii() { 6.4 } else { 11.0 }).sum::<f32>();
-                // 右に置けなければ左へ。枠の外へはみ出すものは出さない
-                let right = p.0 + r + 7.0;
-                let left = p.0 - r - 7.0 - w;
-                let y = p.1 - 7.5;
+                // 右、左、上、下の順に空いている場所を探す
+                let spots = [
+                    (p.0 + r + 7.0, p.1 - 7.5),
+                    (p.0 - r - 7.0 - w, p.1 - 7.5),
+                    (p.0 - w / 2.0, p.1 - r - 18.0),
+                    (p.0 - w / 2.0, p.1 + r + 3.0),
+                ];
                 let fits = |x: f32| x > origin.0 + 4.0 && x + w < origin.0 + vp.0 - 4.0;
-                let x = if fits(right) && try_place(right - 4.0, y, w + 8.0, 16.0) {
-                    right
-                } else if fits(left) && try_place(left - 4.0, y, w + 8.0, 16.0) {
-                    left
-                } else {
+                let Some((x, y)) = spots
+                    .into_iter()
+                    .find(|(x, y)| fits(*x) && place(&mut placed, *x - 4.0, *y, w + 8.0, 16.0))
+                else {
                     continue;
                 };
                 drawn += 1;
