@@ -2,9 +2,12 @@
 pub mod churn;
 pub mod deps;
 pub mod grouping;
+pub mod highlight;
 pub mod index;
 pub mod lang;
 pub mod layout;
 pub mod model;
+pub mod search;
+pub mod store;
 pub mod symbols;
 pub mod walk;
