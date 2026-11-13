@@ -81,7 +81,7 @@ Everything runs on your Mac with your installed Claude Code. Without Claude Code
 
 ### 🌌 A star chart of your repository
 - **Size, churn and dependencies at a glance**: star size is lines of code, brightness is how often the file changed in the last year, and lines are imports between files.
-- **Drawn without AI**: indexing, layout and dependency resolution run locally in a few seconds, even for 10,000+ files.
+- **Drawn without AI**: indexing, layout and dependency resolution run locally in a few seconds, even for a generated repository of 12,000 files.
 - **Zoom and pan** with `⌘` + scroll; click a star to open its code, click a constellation name to read about it.
 
 ### 🧭 Guided tours by Claude
@@ -179,7 +179,7 @@ CC Code View.app
 
 - The star chart comes only from `ccv-core`: file walking, symbol extraction, import resolution, `git log` churn and a deterministic layout.
 - AI analysis sends Claude a prompt and a JSON schema. The result is validated against the repository, so a constellation or tour stop that points to a file that does not exist is dropped.
-- Analyses are saved per repository and commit, so reopening a repository is instant.
+- Each repository's analysis is saved with the commit it was made at, so reopening is instant and the app can tell you when the code has moved on.
 
 ## 🔒 Security
 
@@ -188,7 +188,7 @@ A cloned repository is treated as untrusted input.
 1. **Read-only Claude**: Claude runs in an empty temporary directory and gets the repository through `--add-dir`. Its only tools are `Read`, `Grep` and `Glob`; it cannot write files or run commands. Reads and writes outside those directories are blocked.
 2. **Repository config is ignored**: with `--restricted` and `--strict-mcp-config`, the repository's `.claude/` hooks and `.mcp.json` are never loaded.
 3. **Secrets are not sent**: files that Claude reads go to Anthropic's API, so `.env`, private keys and credential files are denied (see [`crates/ai/src/command.rs`](crates/ai/src/command.rs)). The check is by file name, so secrets stored under other names are not caught.
-4. **Output is validated and shown as plain text**: entries that point outside the repository are dropped, and no Markdown or HTML is rendered.
+4. **Output is validated and shown as plain text**: entries that point to files not in the repository are dropped, and no Markdown or HTML is rendered.
 5. **Nothing is written to your repository**: app data lives in `~/Library/Application Support/cc-code-view/`.
 6. **No telemetry**: the app itself makes no network requests and sends no usage data. AI analysis goes through the `claude` command you installed.
 
@@ -202,14 +202,14 @@ See [SECURITY.md](SECURITY.md) to report a vulnerability.
 
 ## ⚡ Performance
 
-Measured on an Apple M1 with `scripts/measure.sh` ([details](docs/quality/performance.md)):
+Measured on an Apple M1 with `scripts/measure.sh` ([details](docs/quality/performance.md)). The 12,000-file repository is generated with random dependencies; real large repositories have not been measured yet.
 
 | Metric | Result |
 |---|---|
 | Cold start | about 150 ms |
-| Indexing 12,000 files | 1.5 s |
+| Indexing 12,000 files (generated repo) | 1.5 s |
 | App size | 12 MB |
-| Memory while viewing 12,000 files | 169 MB |
+| Memory while viewing 12,000 files (generated repo) | 169 MB |
 | Frame time | p50 16.7 ms, p99 17.7 ms (60 fps) |
 
 ## 🛠 Development
@@ -252,7 +252,7 @@ Areas where help is especially welcome:
 - 🐛 Bug reports and fixes
 - 🎨 Syntax highlighting and import resolution for more languages
 - 🌐 An English UI (the UI is currently Japanese)
-- 🐧 Linux and 🪟 Windows support (gpui runs on both)
+- 🐧 Linux and 🪟 Windows support
 - 📦 Signed and notarized releases
 
 ## 📄 License
