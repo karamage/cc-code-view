@@ -239,8 +239,7 @@ impl StarMap {
         let zoom = ((w.min(h) * 0.7) / (c.extent * 2.0 + 120.0)).clamp(0.6, 3.5);
         self.at_overview = false;
         self.framing = None;
-        // 左のパネルに隠れないよう、右へ寄せて映す
-        let center = (c.center.0 - 180.0 / zoom, c.center.1);
+        let center = c.center;
         self.fly(Camera { center, zoom }, cx);
     }
 

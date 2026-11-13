@@ -70,5 +70,20 @@ case "type":
             usleep(20000)
         }
     }
+case "keys":
+    // 文字をキーコードで送る。Unicode 文字列を載せた入力は gpui の入力欄に届かないため。US 配列の英数字だけ
+    let codes: [Character: Int] = ["a": 0, "s": 1, "d": 2, "f": 3, "h": 4, "g": 5, "z": 6, "x": 7, "c": 8, "v": 9,
+        "b": 11, "q": 12, "w": 13, "e": 14, "r": 15, "y": 16, "t": 17, "1": 18, "2": 19, "3": 20, "4": 21, "6": 22,
+        "5": 23, "9": 25, "7": 26, "8": 28, "0": 29, "o": 31, "u": 32, "i": 34, "p": 35, "l": 37, "j": 38, "k": 40,
+        "n": 45, "m": 46, ".": 47, "/": 44, "-": 27]
+    for ch in a[3] {
+        guard let code = codes[Character(ch.lowercased())] else { continue }
+        for down in [true, false] {
+            let e = CGEvent(keyboardEventSource: src, virtualKey: CGKeyCode(code), keyDown: down)
+            if ch.isUppercase { e?.flags = .maskShift }
+            e?.post(tap: .cghidEventTap)
+            usleep(25000)
+        }
+    }
 default: break
 }

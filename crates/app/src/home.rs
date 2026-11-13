@@ -49,13 +49,26 @@ pub fn validate_repo(path: &Path) -> Result<PathBuf, String> {
 fn status_line(analysis: Option<&Analysis>) -> String {
     match analysis {
         Some(a) => format!(
-            "{} で解析済み · 星座 {} · 停留所 {}",
+            "{} で解析済み　星座 {}　停留所 {}",
             a.model.label(),
             a.modules.len(),
             a.tour.len()
         ),
         None => "まだ解析していません".to_string(),
     }
+}
+
+/// 背景の星雲。一度だけ読み込み、描画のたびに作り直さない
+fn nebula() -> Arc<gpui::Image> {
+    static IMAGE: std::sync::OnceLock<Arc<gpui::Image>> = std::sync::OnceLock::new();
+    IMAGE
+        .get_or_init(|| {
+            Arc::new(gpui::Image::from_bytes(
+                gpui::ImageFormat::Jpeg,
+                include_bytes!("../assets/images/nebula.jpg").to_vec(),
+            ))
+        })
+        .clone()
 }
 
 impl Home {
@@ -138,10 +151,9 @@ impl Home {
             .flex_col()
             .child(
                 div()
-                    .text_size(px(11.))
+                    .text_size(px(12.))
                     .text_color(theme::teal())
-                    .font_family(theme::CODE_FONT)
-                    .child("CC CODE VIEW"),
+                    .child("CC Code View"),
             )
             .child(
                 div()
@@ -164,14 +176,14 @@ impl Home {
                     .text_size(px(14.))
                     .line_height(px(24.))
                     .text_color(theme::text_muted())
-                    .child("クローンしたリポジトリを登録すると、ファイルが星になり、"),
+                    .child("いつものファイルツリーとコードで読みながら、星図で"),
             )
             .child(
                 div()
                     .text_size(px(14.))
                     .line_height(px(24.))
                     .text_color(theme::text_muted())
-                    .child("Claude が読む順番を案内します。"),
+                    .child("全体の中の位置を確かめる。読む順番は Claude が案内します。"),
             )
             .child(
                 div()
@@ -234,6 +246,16 @@ impl Render for Home {
                     this.add(path, cx);
                 }
             }))
+            // 星雲の写真を一番奥に敷き、手描きの星図をその上に重ねる
+            .child(
+                gpui::img(nebula())
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .size_full()
+                    .object_fit(gpui::ObjectFit::Cover)
+                    .opacity(0.25 + 0.6 * intro),
+            )
             .child(
                 canvas(
                     |_, _, _| {},
@@ -289,10 +311,9 @@ impl Render for Home {
                                         .flex_1()
                                         .child(
                                             div()
-                                                .text_size(px(11.))
+                                                .text_size(px(12.))
                                                 .text_color(theme::teal())
-                                                .font_family(theme::CODE_FONT)
-                                                .child("CC CODE VIEW"),
+                                                .child("CC Code View"),
                                         )
                                         .child(
                                             div()

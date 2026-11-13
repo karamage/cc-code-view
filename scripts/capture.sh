@@ -3,7 +3,7 @@
 set -uo pipefail
 OUT=$1; REPO=${2:-../cc-auto-review}; shift; shift || true
 STATES=("$@"); [ ${#STATES[@]} -eq 0 ] && STATES=(home-empty home fresh analyzing done tour code search deep error unavailable)
-BIN=target/release/cc-code-view; DATA=target/demo-data; EMPTY=$(mktemp -d)
+BIN=${BIN:-target/release/cc-code-view}; DATA=target/demo-data; EMPTY=$(mktemp -d)
 [ -x target/winid ] || swiftc -O scripts/winid.swift -o target/winid
 mkdir -p "$OUT"
 for STATE in "${STATES[@]}"; do

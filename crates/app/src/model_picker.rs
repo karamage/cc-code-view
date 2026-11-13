@@ -24,18 +24,19 @@ pub fn model_picker(
             let on_pick = on_pick.clone();
             div()
                 .id((id, i))
-                .px(px(9.))
+                .px(px(8.))
                 .py(px(4.))
                 .rounded(px(6.))
                 .cursor_pointer()
-                .text_size(px(12.))
+                .text_size(px(11.5))
                 // 実行ボタンと競わないよう、選択は中立の色で示す
                 .text_color(if selected { theme::white() } else { theme::text_muted() })
                 .when(selected, |d| d.bg(theme::alpha(theme::white(), 0.17)))
                 .when(!selected, |d| {
                     d.hover(|h| h.bg(theme::alpha(theme::white(), 0.07)).text_color(theme::text()))
                 })
-                .child(model.label())
+                // 狭い場所でも一行に収まるよう、既定は短く書く
+                .child(if model == ModelChoice::Default { "既定" } else { model.label() })
                 .on_click(move |_, window, cx| on_pick(model, window, cx))
         }))
 }

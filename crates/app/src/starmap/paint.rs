@@ -151,10 +151,8 @@ pub fn paint_backdrop(
     window.with_content_mask(Some(ContentMask { bounds }), |window| {
         let origin = (f32::from(bounds.origin.x), f32::from(bounds.origin.y));
         let vp = (f32::from(bounds.size.width), f32::from(bounds.size.height));
-        window.paint_quad(fill(bounds, theme::space()));
+        // 奥の星雲は写真で敷くので、ここでは塗りつぶさない
         let at = |x: f32, y: f32| (origin.0 + vp.0 * x, origin.1 + vp.1 * y);
-        glow(window, at(0.86, 0.3), 220.0, 300.0, theme::alpha(theme::nebula(), 0.95));
-        glow(window, at(0.72, 0.84), 150.0, 240.0, theme::alpha(theme::nebula(), 0.7));
         paint_field(window, origin, vp, Camera { center: (0.0, 0.0), zoom: 1.0 });
 
         // 登録済みなら、飾りではなく利用者自身の空を見せる
@@ -679,7 +677,9 @@ pub fn paint(bounds: Bounds<Pixels>, f: &Frame<'_>, window: &mut Window, cx: &mu
                 continue;
             }
             let share = (c.lines as f32 / biggest).sqrt();
-            let size_px = 12.0 + share * 8.0;
+            // 小さな窓では名前も小さくし、星を隠さない
+            let fit = (vp.0.min(vp.1) / 520.0).clamp(0.62, 1.0);
+            let size_px = ((12.0 + share * 8.0) * fit).max(10.5);
             let center = to_screen(c.center);
             let screen_radius = c.extent * cam.zoom;
             // 遠景で出す名前の数を画面の広さで制限する。残りは近づくか、カーソルを乗せると出る
@@ -722,12 +722,15 @@ pub fn paint(bounds: Bounds<Pixels>, f: &Frame<'_>, window: &mut Window, cx: &mu
                 0.8 + 0.2 * share
             };
             let name_color = if focused {
-                theme::alpha(theme::teal(), lit_amount)
+                theme::alpha(theme::hue(ci), lit_amount)
             } else {
                 theme::alpha(theme::white(), strength * lit_amount)
             };
             let weight = if share > 0.5 { FontWeight::SEMIBOLD } else { FontWeight::MEDIUM };
             text(window, cx, c.name.clone(), (center_x, y), size_px, name_color, weight, true);
+            // ファイルツリーの点と同じ色で、どの星座かを結びつける
+            let dot = (left - size_px * 0.55, y + size_px * 0.62);
+            circle(window, dot, (size_px * 0.17).max(2.2), theme::alpha(theme::hue(ci), strength * lit_amount));
         }
 
         // 名前を置いたあとで、星を障害物に加える。ファイル名が星に重ならないように

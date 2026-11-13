@@ -20,6 +20,14 @@ impl<T> History<T> {
         self.at = self.items.len() - 1;
     }
 
+    pub fn can_back(&self) -> bool {
+        self.at > 0
+    }
+
+    pub fn can_forward(&self) -> bool {
+        self.at + 1 < self.items.len()
+    }
+
     pub fn back(&mut self) -> Option<&T> {
         if self.at == 0 {
             return None;

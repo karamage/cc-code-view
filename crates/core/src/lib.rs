@@ -10,4 +10,5 @@ pub mod model;
 pub mod search;
 pub mod store;
 pub mod symbols;
+pub mod tree;
 pub mod walk;

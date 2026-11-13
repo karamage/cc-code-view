@@ -10,6 +10,8 @@ mod state;
 mod text_input;
 mod theme;
 mod tour;
+mod tree_view;
+mod ui;
 mod workspace;
 
 use args::{DemoState, parse_args};
@@ -101,7 +103,30 @@ fn bind_keys(cx: &mut App) {
         KeyBinding::new("cmd-=", ZoomIn, w),
         KeyBinding::new("cmd--", ZoomOut, w),
         KeyBinding::new("cmd-0", FitAll, w),
-        KeyBinding::new("cmd-shift-l", ToggleSymbols, w),
+        KeyBinding::new("cmd-shift-l", ToggleRail, w),
+        KeyBinding::new("cmd-alt-b", ToggleRail, w),
+        KeyBinding::new("cmd-b", ToggleSidebar, w),
+        KeyBinding::new("cmd-w", CloseTab, w),
+        KeyBinding::new("cmd-1", ShowMap, w),
+        KeyBinding::new("ctrl-tab", NextTab, w),
+        KeyBinding::new("ctrl-shift-tab", PrevTab, w),
+        KeyBinding::new("cmd-shift-]", NextTab, w),
+        KeyBinding::new("cmd-shift-[", PrevTab, w),
+        KeyBinding::new("cmd-shift-e", FocusTree, w),
+        KeyBinding::new("cmd-f", FindInFile, w),
+        KeyBinding::new("cmd-l", GoToLine, w),
+        KeyBinding::new("ctrl-g", GoToLine, w),
+        KeyBinding::new("enter", code::FindNext, Some("CodeFind")),
+        KeyBinding::new("cmd-g", code::FindNext, Some("CodeFind")),
+        KeyBinding::new("shift-enter", code::FindPrev, Some("CodeFind")),
+        KeyBinding::new("cmd-shift-g", code::FindPrev, Some("CodeFind")),
+        KeyBinding::new("escape", code::FindClose, Some("CodeFind")),
+        KeyBinding::new("up", tree_view::Up, Some("FileTree")),
+        KeyBinding::new("down", tree_view::Down, Some("FileTree")),
+        KeyBinding::new("left", tree_view::Collapse, Some("FileTree")),
+        KeyBinding::new("right", tree_view::Expand, Some("FileTree")),
+        KeyBinding::new("enter", tree_view::Activate, Some("FileTree")),
+        KeyBinding::new("space", tree_view::Activate, Some("FileTree")),
         KeyBinding::new("cmd-c", CopySelection, w),
         KeyBinding::new("down", palette::SelectNext, Some("Palette")),
         KeyBinding::new("up", palette::SelectPrev, Some("Palette")),
@@ -192,7 +217,15 @@ fn main() {
         check_claude(cx);
 
         let open_repo = if args.demo == Some(DemoState::Home) { None } else { open };
-        let bounds = Bounds::centered(None, size(px(1280.), px(800.)), cx);
+        // 撮影で最小の大きさを確かめられるよう、環境変数で窓の大きさを変えられる
+        let (w, h) = std::env::var("CCV_WINDOW")
+            .ok()
+            .and_then(|v| {
+                let (w, h) = v.split_once('x')?;
+                Some((w.parse::<f32>().ok()?, h.parse::<f32>().ok()?))
+            })
+            .unwrap_or((1280., 800.));
+        let bounds = Bounds::centered(None, size(px(w), px(h)), cx);
         cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),

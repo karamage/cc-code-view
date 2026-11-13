@@ -9,6 +9,8 @@ pub enum DemoState {
     Done,
     Tour,
     Code,
+    /// コードを開き、ファイル内を検索した状態
+    Find,
     Search,
     Deep,
     /// 深掘りを実際に実行する。入力を送らずに確認するためのもの
@@ -26,6 +28,7 @@ impl DemoState {
             "done" => DemoState::Done,
             "tour" => DemoState::Tour,
             "code" => DemoState::Code,
+            "find" => DemoState::Find,
             "search" => DemoState::Search,
             "deep" => DemoState::Deep,
             "deep-run" => DemoState::DeepRun,
