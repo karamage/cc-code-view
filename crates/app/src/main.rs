@@ -1,4 +1,7 @@
+mod ai_task;
 mod analysis;
+mod blueprint;
+mod diagram_view;
 mod args;
 mod code;
 mod home;
@@ -108,6 +111,7 @@ fn bind_keys(cx: &mut App) {
         KeyBinding::new("cmd-b", ToggleSidebar, w),
         KeyBinding::new("cmd-w", CloseTab, w),
         KeyBinding::new("cmd-1", ShowMap, w),
+        KeyBinding::new("cmd-2", ShowBlueprint, w),
         KeyBinding::new("ctrl-tab", NextTab, w),
         KeyBinding::new("ctrl-shift-tab", PrevTab, w),
         KeyBinding::new("cmd-shift-]", NextTab, w),
@@ -175,6 +179,59 @@ fn analyze_headless(repo: PathBuf, model: ModelChoice, store: &Store) -> i32 {
     }
 }
 
+/// 画面を出さずに設計図を書いて保存する。3 章ずつ並べて動かす。
+fn blueprint_headless(repo: PathBuf, model: ModelChoice, chapters: Option<&str>, store: &Store) -> i32 {
+    use ccv_ai::blueprint::{ChapterContext, write_chapter};
+    use ccv_core::model::ChapterKind;
+    let repo = repo.canonicalize().unwrap_or(repo);
+    let index = Arc::new(build_index(&repo));
+    let kinds: Vec<ChapterKind> = match chapters {
+        Some(list) => ChapterKind::ALL.into_iter().filter(|k| list.split(',').any(|s| s.trim() == k.slug())).collect(),
+        None => ChapterKind::ALL.to_vec(),
+    };
+    let context = Arc::new(ChapterContext::new(&index, store.load_analysis(&repo)));
+    let cfg = ClaudeConfig { bin: "claude".into(), path_env: login_shell_path() };
+    let queue = Arc::new(std::sync::Mutex::new(kinds));
+    let failures = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let workers: Vec<_> = (0..3)
+        .map(|_| {
+            let (queue, context, index, cfg, repo, failures) =
+                (queue.clone(), context.clone(), index.clone(), cfg.clone(), repo.clone(), failures.clone());
+            let store = Store::new(store_root(store));
+            std::thread::spawn(move || {
+                while let Some(kind) = queue.lock().unwrap().pop() {
+                    eprintln!("[{}] start", kind.slug());
+                    let r = write_chapter(&cfg, &repo, &index, &context, kind, model, Default::default(), |e| {
+                        if let RunEvent::Reading(p) = e {
+                            eprintln!("[{}] reading {p}", kind.slug());
+                        }
+                    });
+                    match r {
+                        Ok(c) => {
+                            eprintln!("[{}] done diagrams={} points={}", kind.slug(), c.diagrams.len(), c.points.len());
+                            if let Err(e) = store.save_chapter(&repo, &c) {
+                                eprintln!("{e}");
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("[{}] failed: {e}", kind.slug());
+                            failures.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        }
+                    }
+                }
+            })
+        })
+        .collect();
+    for w in workers {
+        let _ = w.join();
+    }
+    i32::from(failures.load(std::sync::atomic::Ordering::Relaxed) > 0)
+}
+
+fn store_root(store: &Store) -> PathBuf {
+    store.root().to_path_buf()
+}
+
 fn main() {
     state::mark_start();
     let args = parse_args(std::env::args().skip(1));
@@ -183,6 +240,9 @@ fn main() {
 
     if let Some(repo) = args.analyze.clone() {
         std::process::exit(analyze_headless(repo, parse_model(args.model.as_deref()), &store));
+    }
+    if let Some(repo) = args.blueprint.clone() {
+        std::process::exit(blueprint_headless(repo, parse_model(args.model.as_deref()), args.chapters.as_deref(), &store));
     }
 
     Application::new().run(move |cx: &mut App| {

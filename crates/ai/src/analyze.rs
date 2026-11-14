@@ -16,23 +16,25 @@ use std::time::Duration;
 pub const ANALYSIS_TIMEOUT: Duration = Duration::from_secs(600);
 const SKELETON_BUDGET: usize = 60_000;
 
+/// 出力が不正なら、理由を添えて 1 回だけやり直す。`validate` の 2 つ目の引数は最後の試行かどうか。
 #[allow(clippy::too_many_arguments)]
-fn with_retry<T>(
+pub(crate) fn with_retry<T>(
     cfg: &ClaudeConfig,
     repo: &Path,
     schema: &str,
     model: ModelChoice,
+    timeout: Duration,
     cancel: Arc<AtomicBool>,
     on_event: &mut impl FnMut(RunEvent),
     prompt: impl Fn(Option<&str>) -> String,
-    validate: impl Fn(&Value) -> Result<T, InvalidOutput>,
+    validate: impl Fn(&Value, bool) -> Result<T, InvalidOutput>,
 ) -> Result<T, RunError> {
     let cfg = &with_resolved_path(cfg.clone());
     let mut note: Option<String> = None;
     loop {
         let args = claude_args(&prompt(note.as_deref()), schema, repo, model);
-        let raw = run_claude(cfg, args, ANALYSIS_TIMEOUT, cancel.clone(), &mut *on_event)?;
-        match validate(&raw) {
+        let raw = run_claude(cfg, args, timeout, cancel.clone(), &mut *on_event)?;
+        match validate(&raw, note.is_some()) {
             Ok(value) => return Ok(value),
             Err(InvalidOutput(reason)) if note.is_none() => note = Some(reason),
             Err(InvalidOutput(reason)) => {
@@ -56,10 +58,11 @@ pub fn analyze_repo(
         repo,
         ANALYSIS_SCHEMA,
         model,
+        ANALYSIS_TIMEOUT,
         cancel,
         &mut on_event,
         |note| analysis_prompt(repo, &skel, note),
-        |raw| validate_analysis(raw, index, model),
+        |raw, _| validate_analysis(raw, index, model),
     )
 }
 
@@ -77,10 +80,11 @@ pub fn deep_dive(
         repo,
         DEEP_DIVE_SCHEMA,
         model,
+        ANALYSIS_TIMEOUT,
         cancel,
         &mut on_event,
         |note| deep_dive_prompt(repo, module, note),
-        |raw| validate_deep_dive(raw, index, &module.id, model),
+        |raw, _| validate_deep_dive(raw, index, &module.id, model),
     )
 }
 

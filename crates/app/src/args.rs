@@ -7,6 +7,12 @@ pub enum DemoState {
     Fresh,
     Analyzing,
     Done,
+    /// 設計図のタブ
+    Blueprint,
+    /// 設計図の図を拡大した状態
+    BlueprintFocus,
+    /// 設計図を書いている途中
+    BlueprintRunning,
     Tour,
     Code,
     /// コードを開き、ファイル内を検索した状態
@@ -26,6 +32,9 @@ impl DemoState {
             "fresh" => DemoState::Fresh,
             "analyzing" => DemoState::Analyzing,
             "done" => DemoState::Done,
+            "blueprint" => DemoState::Blueprint,
+            "blueprint-focus" => DemoState::BlueprintFocus,
+            "blueprint-running" => DemoState::BlueprintRunning,
             "tour" => DemoState::Tour,
             "code" => DemoState::Code,
             "find" => DemoState::Find,
@@ -46,6 +55,10 @@ pub struct Args {
     pub demo: Option<DemoState>,
     /// 画面を出さずに解析して保存する
     pub analyze: Option<PathBuf>,
+    /// 画面を出さずに設計図を書いて保存する
+    pub blueprint: Option<PathBuf>,
+    /// 設計図で書く章。カンマ区切りの slug
+    pub chapters: Option<String>,
     pub model: Option<String>,
 }
 
@@ -59,6 +72,8 @@ pub fn parse_args(args: impl IntoIterator<Item = String>) -> Args {
             "--demo" => out.demo = it.next().as_deref().and_then(DemoState::parse),
             "--analyze" => out.analyze = it.next().map(PathBuf::from),
             "--model" => out.model = it.next(),
+            "--blueprint" => out.blueprint = it.next().map(PathBuf::from),
+            "--chapters" => out.chapters = it.next(),
             _ => {}
         }
     }

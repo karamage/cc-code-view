@@ -1,5 +1,5 @@
 //! 設定と解析結果の保存。登録したリポジトリには何も書かない。
-use crate::model::{Analysis, DeepDive, Settings, SkyPreview};
+use crate::model::{Analysis, Chapter, ChapterKind, DeepDive, Settings, SkyPreview};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use sha2::{Digest, Sha256};
@@ -34,6 +34,10 @@ fn write_json<T: Serialize>(path: &Path, value: &T) -> io::Result<()> {
 impl Store {
     pub fn new(root: PathBuf) -> Store {
         Store { root }
+    }
+
+    pub fn root(&self) -> &Path {
+        &self.root
     }
 
     pub fn default_root() -> PathBuf {
@@ -80,6 +84,19 @@ impl Store {
     pub fn save_deep_dive(&self, repo: &Path, dive: &DeepDive) -> io::Result<()> {
         write_json(&self.deep_path(repo, &dive.module_id), dive)
     }
+
+    fn chapter_path(&self, repo: &Path, kind: ChapterKind) -> PathBuf {
+        self.repo_dir(repo).join("blueprint").join(format!("{}.json", kind.slug()))
+    }
+
+    /// 設計図の章。章ごとに別のファイルにし、書けた章から残す。
+    pub fn load_chapter(&self, repo: &Path, kind: ChapterKind) -> Option<Chapter> {
+        read_json::<Chapter>(&self.chapter_path(repo, kind)).filter(|c| c.kind == kind)
+    }
+
+    pub fn save_chapter(&self, repo: &Path, chapter: &Chapter) -> io::Result<()> {
+        write_json(&self.chapter_path(repo, chapter.kind), chapter)
+    }
 }
 
 #[cfg(test)]
@@ -113,6 +130,20 @@ mod tests {
         store.save_deep_dive(repo, &d).unwrap();
         assert_eq!(store.load_deep_dive(repo, "m/x").unwrap(), d);
         assert!(store.load_deep_dive(repo, "other").is_none());
+        let c = Chapter {
+            kind: ChapterKind::Domain,
+            head: Some("abc".into()),
+            model: ModelChoice::Sonnet,
+            generated_at: 1,
+            headline: "h".into(),
+            summary: "s".into(),
+            diagrams: vec![],
+            points: vec![],
+            glossary: vec![],
+        };
+        store.save_chapter(repo, &c).unwrap();
+        assert_eq!(store.load_chapter(repo, ChapterKind::Domain).unwrap(), c);
+        assert!(store.load_chapter(repo, ChapterKind::Modules).is_none());
         let p = SkyPreview { stars: vec![(0.5, 0.5, 2.0, 1.0)], lines: vec![] };
         store.save_preview(repo, &p).unwrap();
         assert_eq!(store.load_preview(repo).unwrap(), p);

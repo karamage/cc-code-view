@@ -1,6 +1,8 @@
 //! リポジトリを開いた画面。左にファイルツリー、中央にタブとコード、右に現在地の星図を置く。
+use crate::ai_task::run_ai;
 use crate::analysis::{AnalysisState, Ev, transition};
 use crate::args::DemoState;
+use crate::blueprint::{BlueprintEvent, BlueprintView, TocState, chapter_glyph, chapter_hue};
 use crate::code::{CodeEvent, CodeView, FindMode, group_digits, symbol_glyph};
 use crate::ja_text::paragraph;
 use crate::model_picker::model_picker;
@@ -24,7 +26,7 @@ use gpui::{
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 actions!(
@@ -53,6 +55,7 @@ actions!(
         FocusTree,
         FindInFile,
         GoToLine,
+        ShowBlueprint,
     ]
 );
 
@@ -95,6 +98,7 @@ struct Loaded {
     tree: Entity<TreeView>,
     modules: Vec<Module>,
     analysis: Option<Analysis>,
+    blueprint: Entity<BlueprintView>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -112,8 +116,10 @@ pub struct Workspace {
     focus: FocusHandle,
     loaded: Option<Loaded>,
     tabs: Vec<Tab>,
-    /// `None` なら星図のタブ
+    /// `None` なら星図か設計図のタブ
     active: Option<usize>,
+    /// ファイルを開いていないとき、星図ではなく設計図を出す
+    blueprint_open: bool,
     sidebar_open: bool,
     sidebar_width: f32,
     rail_open: bool,
@@ -151,51 +157,6 @@ impl Drop for Workspace {
         self.cancel.store(true, Ordering::Relaxed);
         self.deep_cancel.store(true, Ordering::Relaxed);
     }
-}
-
-/// バックグラウンドで AI 処理を動かし、進捗と結果を受け取る。
-fn run_ai<T: Send + 'static>(
-    cx: &mut Context<Workspace>,
-    work: impl FnOnce(&mut dyn FnMut(RunEvent)) -> Result<T, RunError> + Send + 'static,
-    on_event: impl Fn(&mut Workspace, RunEvent, &mut Context<Workspace>) + 'static,
-    on_done: impl FnOnce(&mut Workspace, Result<T, RunError>, &mut Context<Workspace>) + 'static,
-) {
-    let events: Arc<Mutex<Vec<RunEvent>>> = Default::default();
-    let result: Arc<Mutex<Option<Result<T, RunError>>>> = Arc::new(Mutex::new(None));
-    {
-        let (events, result) = (events.clone(), result.clone());
-        std::thread::spawn(move || {
-            let mut push = |e: RunEvent| events.lock().unwrap().push(e);
-            let r = work(&mut push);
-            *result.lock().unwrap() = Some(r);
-        });
-    }
-    cx.spawn(async move |this, cx| {
-        let mut on_done = Some(on_done);
-        loop {
-            cx.background_executor().timer(Duration::from_millis(120)).await;
-            let drained: Vec<RunEvent> = std::mem::take(&mut *events.lock().unwrap());
-            let finished = result.lock().unwrap().take();
-            let done = finished.is_some();
-            let alive = this.update(cx, |this, cx| {
-                for e in drained {
-                    on_event(this, e, cx);
-                }
-                // 結果が届いたときにだけ取り出す。先に take すると完了処理を失う
-                if let Some(r) = finished
-                    && let Some(f) = on_done.take()
-                {
-                    f(this, r, cx);
-                }
-                // 経過時間の表示を進める
-                cx.notify();
-            });
-            if done || alive.is_err() {
-                break;
-            }
-        }
-    })
-    .detach();
 }
 
 /// 状態の帯に出す言語名。
@@ -250,6 +211,7 @@ impl Workspace {
             loaded: None,
             tabs: Vec::new(),
             active: None,
+            blueprint_open: false,
             sidebar_open: true,
             sidebar_width: 256.,
             rail_open: true,
@@ -287,6 +249,7 @@ impl Workspace {
         let map = cx.new(|_| StarMap::new(sky, reduce_motion));
         let code = cx.new(|_| CodeView::new(self.repo.clone(), index.clone()));
         let tree = cx.new(|cx| TreeView::new(index.clone(), cx));
+        let blueprint = cx.new(|cx| BlueprintView::new(self.repo.clone(), index.clone(), analysis.clone(), cx));
         let subscriptions = vec![
             cx.subscribe(&map, |this, _, e: &StarMapEvent, cx| match e {
                 StarMapEvent::OpenFile(i) => this.open_star(*i, cx),
@@ -309,8 +272,33 @@ impl Workspace {
                     this.open_path_as(&path, 0, None, true, cx);
                 }
             }),
+            cx.subscribe(&blueprint, |this, _, e: &BlueprintEvent, cx| match e {
+                BlueprintEvent::Open { path, line, band } => {
+                    let (path, line, band) = (path.clone(), *line, *band);
+                    this.open_path(&path, line, band, cx);
+                }
+                BlueprintEvent::Hover(path) => {
+                    if let Some(l) = &this.loaded {
+                        let lit: Vec<usize> = path.as_ref().and_then(|p| l.file_at.get(p).copied()).into_iter().collect();
+                        l.map.update(cx, |m, cx| m.set_lit(lit, cx));
+                    }
+                }
+                BlueprintEvent::Reading(path) => {
+                    let label = this.describe(&RunEvent::Reading(path.clone()));
+                    if let Some(l) = &this.loaded
+                        && let Some(i) = l.file_at.get(&label).copied()
+                    {
+                        this.recent_reads.push(i);
+                        let start = this.recent_reads.len().saturating_sub(5);
+                        this.recent_reads.drain(..start);
+                        let lit = this.recent_reads.clone();
+                        l.map.update(cx, |m, cx| m.set_lit(lit, cx));
+                    }
+                }
+            }),
             cx.observe(&map, |_, _, cx| cx.notify()),
             cx.observe(&code, |_, _, cx| cx.notify()),
+            cx.observe(&blueprint, |_, _, cx| cx.notify()),
         ];
         let file_at =
             index.files.iter().enumerate().map(|(i, f)| (f.path.clone(), i)).collect();
@@ -322,6 +310,7 @@ impl Workspace {
             tree,
             modules,
             analysis,
+            blueprint,
             _subscriptions: subscriptions,
         });
         self.update_tree_marks(cx);
@@ -365,12 +354,17 @@ impl Workspace {
     }
 
     fn dock_visible(&self) -> bool {
-        !self.reading() && self.tour.is_none() && self.deep.is_none()
+        !self.reading() && !self.blueprint_open && self.tour.is_none() && self.deep.is_none()
+    }
+
+    /// 星図を右のパネルに縮めて置く画面か。
+    fn map_in_rail(&self) -> bool {
+        self.reading() || self.blueprint_open
     }
 
     /// 星図の置き場所と余白を、いまの画面に合わせる。
     fn place_map(&mut self, cx: &mut Context<Self>) {
-        let in_rail = self.reading();
+        let in_rail = self.map_in_rail();
         let dock = self.dock_visible();
         let Some(l) = &self.loaded else { return };
         let insets = if in_rail { (14.0, 14.0, 14.0, 14.0) } else { (28.0, 28.0, if dock { 120.0 } else { 56.0 }, 28.0) };
@@ -417,7 +411,7 @@ impl Workspace {
         let focus = self.deep.as_ref().map(|d| d.constellation).or(reading);
         // ツアーを始める前から、全景で読む順番を見せる
         if self.tour.is_none() {
-            let preview: Vec<usize> = if self.reading() || self.deep.is_some() {
+            let preview: Vec<usize> = if self.map_in_rail() || self.deep.is_some() {
                 Vec::new()
             } else {
                 l.analysis.as_ref().map_or(Vec::new(), |a| {
@@ -451,6 +445,19 @@ impl Workspace {
     fn show_map(&mut self, cx: &mut Context<Self>) {
         self.remember_line(cx);
         self.active = None;
+        self.blueprint_open = false;
+        if let Some(l) = &self.loaded {
+            l.tree.update(cx, |t, cx| t.clear_active(cx));
+        }
+        cx.notify();
+    }
+
+    /// 設計図のタブへ切り替える。
+    fn show_blueprint(&mut self, cx: &mut Context<Self>) {
+        self.remember_line(cx);
+        self.active = None;
+        self.blueprint_open = true;
+        self.deep = None;
         if let Some(l) = &self.loaded {
             l.tree.update(cx, |t, cx| t.clear_active(cx));
         }
@@ -497,6 +504,7 @@ impl Workspace {
             }
         };
         self.active = Some(at);
+        self.blueprint_open = false;
         let Some(l) = &self.loaded else { return };
         l.tree.update(cx, |t, cx| t.reveal(path, cx));
         if self.tour.is_none()
@@ -760,6 +768,7 @@ impl Workspace {
         let Some(l) = &mut self.loaded else { return };
         l.modules = analysis.modules.clone();
         let sky = Arc::new(build_sky(&l.index, &l.modules));
+        l.blueprint.update(cx, |b, _| b.set_analysis(Some(analysis.clone())));
         l.analysis = Some(analysis);
         l.map.update(cx, |m, cx| m.set_sky(sky.clone(), cx));
         self.save_preview(&sky, cx);
@@ -910,7 +919,12 @@ impl Workspace {
     }
 
     fn on_close_top(&mut self, _: &CloseTop, _: &mut Window, cx: &mut Context<Self>) {
-        if self.tour.is_some() {
+        if let Some(l) = &self.loaded
+            && self.blueprint_open
+            && l.blueprint.read(cx).has_focus()
+        {
+            l.blueprint.update(cx, |b, cx| b.close_focus(cx));
+        } else if self.tour.is_some() {
             self.end_tour(cx);
         } else if self.deep.is_some() {
             self.close_deep(cx);
@@ -971,23 +985,36 @@ impl Workspace {
         self.show_map(cx);
     }
 
-    fn on_next_tab(&mut self, _: &NextTab, _: &mut Window, cx: &mut Context<Self>) {
-        // 星図のタブを先頭に含めて巡回する
-        let count = self.tabs.len() + 1;
-        let at = self.active.map_or(0, |a| a + 1);
-        match (at + 1) % count {
-            0 => self.show_map(cx),
-            n => self.activate_tab(n - 1, cx),
+    fn on_show_blueprint(&mut self, _: &ShowBlueprint, _: &mut Window, cx: &mut Context<Self>) {
+        self.show_blueprint(cx);
+    }
+
+    /// タブの並び（星図、設計図、ファイル…）での位置。
+    fn tab_position(&self) -> usize {
+        match self.active {
+            Some(a) => a + 2,
+            None if self.blueprint_open => 1,
+            None => 0,
         }
     }
 
-    fn on_prev_tab(&mut self, _: &PrevTab, _: &mut Window, cx: &mut Context<Self>) {
-        let count = self.tabs.len() + 1;
-        let at = self.active.map_or(0, |a| a + 1);
-        match (at + count - 1) % count {
+    fn go_to_tab_position(&mut self, at: usize, cx: &mut Context<Self>) {
+        match at {
             0 => self.show_map(cx),
-            n => self.activate_tab(n - 1, cx),
+            1 => self.show_blueprint(cx),
+            n => self.activate_tab(n - 2, cx),
         }
+    }
+
+    fn on_next_tab(&mut self, _: &NextTab, _: &mut Window, cx: &mut Context<Self>) {
+        // 星図と設計図のタブを先頭に含めて巡回する
+        let count = self.tabs.len() + 2;
+        self.go_to_tab_position((self.tab_position() + 1) % count, cx);
+    }
+
+    fn on_prev_tab(&mut self, _: &PrevTab, _: &mut Window, cx: &mut Context<Self>) {
+        let count = self.tabs.len() + 2;
+        self.go_to_tab_position((self.tab_position() + count - 1) % count, cx);
     }
 
     fn on_find(&mut self, _: &FindInFile, window: &mut Window, cx: &mut Context<Self>) {
@@ -1116,6 +1143,53 @@ impl Workspace {
                 self.state = AnalysisState::Unavailable(RunError::NotInstalled.to_string());
             }
             DemoState::Home | DemoState::Fresh | DemoState::Done => {}
+            DemoState::Blueprint => {
+                let blueprint = l.blueprint.clone();
+                self.show_blueprint(cx);
+                // 撮影で章を指定できるようにする
+                if let Some(chapter) = std::env::var("CCV_CHAPTER").ok().and_then(|v| v.parse::<usize>().ok()) {
+                    cx.spawn_in(window, async move |_, cx| {
+                        cx.background_executor().timer(Duration::from_millis(300)).await;
+                        let _ = blueprint.update(cx, |b, cx| b.scroll_to(chapter, cx));
+                        let extra = std::env::var("CCV_SCROLL").ok().and_then(|v| v.parse::<f32>().ok());
+                        if let Some(extra) = extra {
+                            cx.background_executor().timer(Duration::from_millis(300)).await;
+                            let _ = blueprint.update(cx, |b, cx| b.scroll_by(extra, cx));
+                        }
+                    })
+                    .detach();
+                }
+            }
+            DemoState::BlueprintFocus => {
+                self.show_blueprint(cx);
+                // 図の配置は最初の描画で行うので、それを待ってから開く
+                cx.spawn_in(window, async move |this, cx| {
+                    let at = std::env::var("CCV_FOCUS").ok().and_then(|v| {
+                        let (c, d) = v.split_once(',')?;
+                        Some((c.parse::<usize>().ok()?, d.parse::<usize>().ok()?))
+                    });
+                    let (c, d) = at.unwrap_or((2, 0));
+                    for _ in 0..20 {
+                        cx.background_executor().timer(Duration::from_millis(250)).await;
+                        let done = this
+                            .update_in(cx, |this, _, cx| {
+                                let Some(l) = &this.loaded else { return true };
+                                l.blueprint.update(cx, |b, cx| b.open_focus(c, d, cx));
+                                l.blueprint.read(cx).has_focus()
+                            })
+                            .unwrap_or(true);
+                        if done {
+                            break;
+                        }
+                    }
+                })
+                .detach();
+            }
+            DemoState::BlueprintRunning => {
+                let blueprint = l.blueprint.clone();
+                self.show_blueprint(cx);
+                blueprint.update(cx, |b, cx| b.demo_running(cx));
+            }
         }
     }
 }
@@ -1331,7 +1405,12 @@ impl Workspace {
             let sky = l.map.read(cx).sky().clone();
             sky.star_constellation.get(i).map(|c| theme::hue(*c as usize))
         };
-        let map_active = self.active.is_none();
+        let map_active = self.active.is_none() && !self.blueprint_open;
+        let blueprint_active = self.active.is_none() && self.blueprint_open;
+        let blueprint_badge = self.loaded.as_ref().map(|l| {
+            let b = l.blueprint.read(cx);
+            (b.ready_count(), b.busy())
+        });
         let tab_shell = |id: gpui::ElementId, active: bool| {
             div()
                 .id(id)
@@ -1418,6 +1497,19 @@ impl Workspace {
                     .child(div().text_size(px(11.)).text_color(theme::violet()).child("✦"))
                     .child("星図")
                     .on_click(cx.listener(|this, _, _, cx| this.show_map(cx))),
+            )
+            .child(
+                tab_shell("blueprint-tab".into(), blueprint_active)
+                    .pr(px(14.))
+                    .child(chapter_glyph(ccv_core::model::ChapterKind::Architecture, theme::teal().into(), 13.0))
+                    .child("設計図")
+                    .when_some(blueprint_badge, |d, (ready, busy)| {
+                        d.when(busy, |d| d.child(pulse_dot(theme::teal())))
+                            .when(!busy && ready > 0, |d| {
+                                d.child(div().text_size(px(10.5)).font_family(theme::CODE_FONT).text_color(theme::text_muted()).child(format!("{ready}/6")))
+                            })
+                    })
+                    .on_click(cx.listener(|this, _, _, cx| this.show_blueprint(cx))),
             )
             .children(tabs)
     }
@@ -2296,15 +2388,105 @@ impl Workspace {
         )
     }
 
+    /// 設計図を読んでいる間の右のパネル。章の目次と、触れている要素のファイル。
+    fn render_blueprint_rail(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        let l = self.loaded.as_ref()?;
+        let b = l.blueprint.read(cx);
+        let toc = b.toc();
+        let active = b.active_chapter();
+        let hovered = b.hovered_file().map(str::to_string);
+        let file = hovered.as_ref().and_then(|p| l.file_at.get(p).map(|i| &l.index.files[*i]));
+        Some(
+            div()
+                .flex()
+                .flex_col()
+                .child(div().mb(px(6.)).child(section_label("章")))
+                .children(toc.into_iter().enumerate().map(|(i, (kind, state))| {
+                    let hue = chapter_hue(kind);
+                    let current = active == Some(i);
+                    let (dot, note): (gpui::Hsla, &str) = match state {
+                        TocState::Ready => (theme::alpha(hue, 0.9), ""),
+                        TocState::Stale => (theme::tok_number().into(), "更新あり"),
+                        TocState::Running => (theme::teal().into(), "執筆中"),
+                        TocState::Queued => (theme::alpha(theme::text_muted(), 0.6), "待機"),
+                        TocState::Failed => (theme::danger().into(), "失敗"),
+                        TocState::Missing => (theme::alpha(theme::text_muted(), 0.3), "未作成"),
+                    };
+                    div()
+                        .id(("toc", i))
+                        .relative()
+                        .h(px(34.))
+                        .mx(px(-8.))
+                        .px(px(8.))
+                        .rounded(px(7.))
+                        .flex()
+                        .items_center()
+                        .gap(px(10.))
+                        .cursor_pointer()
+                        .when(current, |d| d.bg(theme::alpha(hue, 0.1)))
+                        .hover(|h| h.bg(theme::alpha(theme::white(), 0.05)))
+                        .when(current, |d| d.child(div().absolute().left_0().top(px(8.)).bottom(px(8.)).w(px(2.)).rounded_full().bg(hue)))
+                        .child(div().w(px(18.)).flex_none().text_size(px(11.)).font_family(theme::CODE_FONT).text_color(hue).child(format!("{:02}", kind.number())))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .overflow_hidden()
+                                .whitespace_nowrap()
+                                .text_ellipsis()
+                                .text_size(px(12.5))
+                                .text_color(if current { theme::white() } else { theme::text() })
+                                .child(kind.title()),
+                        )
+                        .when(!note.is_empty(), |d| d.child(div().flex_none().text_size(px(10.5)).text_color(theme::text_muted()).child(note)))
+                        .child(div().flex_none().size(px(6.)).rounded_full().bg(dot))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            if let Some(l) = &this.loaded {
+                                l.blueprint.update(cx, |b, cx| b.scroll_to(i, cx));
+                            }
+                        }))
+                }))
+                .child(div().mt(px(22.)).mb(px(6.)).child(section_label("触れている要素")))
+                .child(match (hovered, file) {
+                    (Some(path), Some(f)) => div()
+                        .p(px(10.))
+                        .rounded(px(8.))
+                        .border_1()
+                        .border_color(theme::alpha(theme::teal(), 0.35))
+                        .bg(theme::alpha(theme::teal(), 0.05))
+                        .flex()
+                        .flex_col()
+                        .gap(px(4.))
+                        .child(div().text_size(px(12.)).font_family(theme::CODE_FONT).text_color(theme::teal()).child(crate::palette::middle_ellipsis(&path, 36)))
+                        .child(
+                            div()
+                                .text_size(px(11.))
+                                .text_color(theme::text_muted())
+                                .child(format!("{} 行  {}  1 年で {} 回変更", group_digits(f.lines as u64), language_label(&f.path, f.lang), f.churn)),
+                        )
+                        .into_any_element(),
+                    _ => div()
+                        .text_size(px(12.))
+                        .line_height(px(19.))
+                        .text_color(theme::alpha(theme::text_muted(), 0.85))
+                        .child("図の要素に触れると、上の星図でそのファイルの星が光ります。")
+                        .into_any_element(),
+                })
+                .into_any_element(),
+        )
+    }
+
     fn render_rail(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
         if !self.rail_visible() {
             return None;
         }
         let l = self.loaded.as_ref()?;
-        let reading = self.reading();
+        let reading = self.map_in_rail();
         let map = l.map.clone();
         let content = if self.deep.is_some() {
             self.render_deep(window, cx)
+        } else if self.blueprint_open && self.active.is_none() {
+            self.render_blueprint_rail(cx)
         } else if reading {
             self.render_reading_rail(window, cx)
         } else {
@@ -2624,6 +2806,7 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::on_copy))
             .on_action(cx.listener(Self::on_close_tab))
             .on_action(cx.listener(Self::on_show_map))
+            .on_action(cx.listener(Self::on_show_blueprint))
             .on_action(cx.listener(Self::on_next_tab))
             .on_action(cx.listener(Self::on_prev_tab))
             .on_action(cx.listener(Self::on_focus_tree))
@@ -2691,12 +2874,16 @@ impl Render for Workspace {
         let sidebar = self.render_sidebar(cx);
         let tabs = self.render_tabs(cx).into_any_element();
         let rail = self.render_rail(window, cx);
-        let hint = (!reading).then(|| self.render_map_hint(center_width, cx)).flatten();
+        let hint = (!reading && !self.blueprint_open).then(|| self.render_map_hint(center_width, cx)).flatten();
         let status = self.render_statusbar(cx).into_any_element();
         let l = self.loaded.as_ref().expect("上で確認した");
         let (map, code) = (l.map.clone(), l.code.clone());
         // 星図は一つしかないので、読んでいる間は右のパネルに置く
-        let center: gpui::AnyElement = if reading {
+        let blueprint_view = l.blueprint.clone();
+        let center: gpui::AnyElement = if self.blueprint_open && !reading {
+            blueprint_view.update(cx, |b, _| b.set_width(center_width));
+            div().flex_1().min_h_0().child(blueprint_view).into_any_element()
+        } else if reading {
             div()
                 .flex_1()
                 .min_h_0()

@@ -182,3 +182,119 @@ pub struct SkyPreview {
     pub stars: Vec<(f32, f32, f32, f32)>,
     pub lines: Vec<(u32, u32)>,
 }
+
+/// 設計図の章。コードを読むときの観点ごとに一つ。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum ChapterKind {
+    Architecture,
+    DataStructures,
+    DataFlow,
+    Domain,
+    UseCases,
+    Modules,
+}
+
+impl ChapterKind {
+    pub const ALL: [ChapterKind; 6] = [
+        ChapterKind::Architecture,
+        ChapterKind::DataStructures,
+        ChapterKind::DataFlow,
+        ChapterKind::Domain,
+        ChapterKind::UseCases,
+        ChapterKind::Modules,
+    ];
+
+    pub fn slug(self) -> &'static str {
+        match self {
+            ChapterKind::Architecture => "architecture",
+            ChapterKind::DataStructures => "data-structures",
+            ChapterKind::DataFlow => "data-flow",
+            ChapterKind::Domain => "domain",
+            ChapterKind::UseCases => "use-cases",
+            ChapterKind::Modules => "modules",
+        }
+    }
+
+    pub fn title(self) -> &'static str {
+        match self {
+            ChapterKind::Architecture => "全体アーキテクチャ",
+            ChapterKind::DataStructures => "データ構造",
+            ChapterKind::DataFlow => "データフロー",
+            ChapterKind::Domain => "ドメイン",
+            ChapterKind::UseCases => "ユースケース",
+            ChapterKind::Modules => "画面とモジュール構成",
+        }
+    }
+
+    /// 章が答える問い。目次と空の状態に出す
+    pub fn question(self) -> &'static str {
+        match self {
+            ChapterKind::Architecture => "どんな部品が、どの向きに依存しているか",
+            ChapterKind::DataStructures => "中心になる型と、その持ち物と関係",
+            ChapterKind::DataFlow => "入力が出力になるまでの変換の道筋",
+            ChapterKind::Domain => "扱っている問題の言葉と決まりごと",
+            ChapterKind::UseCases => "使う人から見て、何ができるか",
+            ChapterKind::Modules => "画面とモジュールの分け方と行き来",
+        }
+    }
+
+    pub fn number(self) -> usize {
+        ChapterKind::ALL.iter().position(|k| *k == self).unwrap_or(0) + 1
+    }
+}
+
+/// 解説が根拠にするコードの範囲。
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CodeRef {
+    pub path: String,
+    /// 1 始まり
+    pub start_line: u32,
+    pub end_line: u32,
+}
+
+/// 図の要素とファイルの対応。図から直接コードを開ける。
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct NodeLink {
+    pub id: String,
+    pub path: String,
+    /// 1 始まり。0 ならファイルの先頭
+    pub line: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct DiagramSpec {
+    pub title: String,
+    pub caption: String,
+    /// 検証済みの Mermaid
+    pub mermaid: String,
+    pub links: Vec<NodeLink>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ChapterPoint {
+    pub heading: String,
+    pub body: String,
+    pub refs: Vec<CodeRef>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Term {
+    pub term: String,
+    pub meaning: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Chapter {
+    pub kind: ChapterKind,
+    pub head: Option<String>,
+    pub model: ModelChoice,
+    /// UNIX 時刻の秒
+    #[serde(default)]
+    pub generated_at: u64,
+    pub headline: String,
+    pub summary: String,
+    pub diagrams: Vec<DiagramSpec>,
+    pub points: Vec<ChapterPoint>,
+    #[serde(default)]
+    pub glossary: Vec<Term>,
+}

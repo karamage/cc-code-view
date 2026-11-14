@@ -1,9 +1,9 @@
 //! 画面で共通に使う小さな部品。ボタンとキーの表示の形をここで揃える。
 use crate::theme;
-use gpui::{FontWeight, SharedString, Stateful, Div, div, prelude::*, px};
+use gpui::{Div, ElementId, FontWeight, SharedString, Stateful, div, prelude::*, px};
 
 /// いちばん勧める操作。一つの面に一つだけ置く
-pub fn button_primary(id: &'static str, label: impl Into<SharedString>) -> Stateful<Div> {
+pub fn button_primary(id: impl Into<ElementId>, label: impl Into<SharedString>) -> Stateful<Div> {
     div()
         .id(id)
         .flex_none()
@@ -22,7 +22,7 @@ pub fn button_primary(id: &'static str, label: impl Into<SharedString>) -> State
         .child(label.into())
 }
 
-pub fn button_secondary(id: &'static str, label: impl Into<SharedString>) -> Stateful<Div> {
+pub fn button_secondary(id: impl Into<ElementId>, label: impl Into<SharedString>) -> Stateful<Div> {
     div()
         .id(id)
         .flex_none()
@@ -42,7 +42,7 @@ pub fn button_secondary(id: &'static str, label: impl Into<SharedString>) -> Sta
 }
 
 /// 枠のない控えめな操作。帯や見出しの横に置く
-pub fn text_button(id: &'static str, label: impl Into<SharedString>) -> Stateful<Div> {
+pub fn text_button(id: impl Into<ElementId>, label: impl Into<SharedString>) -> Stateful<Div> {
     div()
         .id(id)
         .flex_none()

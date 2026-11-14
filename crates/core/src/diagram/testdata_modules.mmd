@@ -1,0 +1,45 @@
+flowchart TD
+  subgraph TAURI["src-tauri（デスクトップの殻）"]
+    LIB["lib.rs start_server<br>サーバを子プロセスで起動し合言葉を渡す"]
+  end
+  subgraph CLIENT["src/client（React）"]
+    MAIN_C(["main.tsx bootstrap"])
+    APP["App.tsx Screen 切替"]
+    PAGES["pages<br>一覧 / レビュー / 設定 / 学び"]
+    STATE["state<br>sessions / autopilot / watch / draft / chat"]
+    API["api.ts ApiClient"]
+    STORAGE["storage.ts RemoteStorage"]
+  end
+  subgraph SERVER["src/server（Hono）"]
+    ENTRY(["index.ts / index.tjs.ts"])
+    MAIN_S["main.ts start / main<br>PATH・preflight・配線"]
+    APPTS["app.ts createApp<br>合言葉の検査とルート登録"]
+    ROUTES["routes<br>prs / review / chat / submit / settings / learnings / system"]
+    REVIEWER["reviewer + snapshot"]
+    DIFF["diff parse / anchor"]
+    GH["github client / payload"]
+    STORE[("store<br>settings.json / state/*.json / learnings.json")]
+  end
+  SHARED{{"src/shared<br>types / settings / risk / risk-score"}}
+  CLAUDE[["claude CLI"]]
+  GHCLI[["gh CLI"]]
+  LIB -->|"--desktop --port 0 と TOKEN"| ENTRY
+  ENTRY --> MAIN_S
+  MAIN_S --> APPTS
+  APPTS --> ROUTES
+  MAIN_C --> APP
+  APP --> PAGES
+  PAGES --> STATE
+  STATE ==> API
+  PAGES --> API
+  MAIN_C --> STORAGE
+  API ==>|"HTTP / SSE"| ROUTES
+  STORAGE -->|"/api/state/:key"| ROUTES
+  ROUTES ==> REVIEWER
+  ROUTES --> DIFF
+  ROUTES --> GH
+  ROUTES --> STORE
+  REVIEWER ==> CLAUDE
+  GH --> GHCLI
+  ROUTES -.-> SHARED
+  STATE -.-> SHARED

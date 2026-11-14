@@ -27,12 +27,12 @@ fn plain(text: &str) -> String {
     out.trim().to_string()
 }
 
-fn is_safe_relative(path: &str) -> bool {
+pub(crate) fn is_safe_relative(path: &str) -> bool {
     !path.is_empty()
         && Path::new(path).components().all(|c| matches!(c, Component::Normal(_) | Component::CurDir))
 }
 
-fn clean_path(path: &str) -> String {
+pub(crate) fn clean_path(path: &str) -> String {
     path.trim_start_matches("./").trim_end_matches('/').to_string()
 }
 
