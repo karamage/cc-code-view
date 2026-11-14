@@ -520,9 +520,21 @@ pub fn layout(g: &Graph, m: &dyn Measure) -> Scene {
             vs[v].x += shift;
         }
     }
+    // 囲みの中の要素を、囲みの中心へ弱く引き寄せる。外とのつながりに引かれて囲みが間延びするのを防ぐ
+    let innermost: Vec<Option<usize>> = vpaths.iter().map(|p| p.last().copied()).collect();
     let place = |vs: &mut Vec<Vertex>, layer: &[usize], use_up: bool, use_down: bool| {
         if layer.is_empty() {
             return;
+        }
+        let mut centre: std::collections::HashMap<usize, (f32, f32)> = Default::default();
+        for (v, c) in innermost.iter().enumerate() {
+            if let Some(c) = c
+                && vs[v].real.is_some()
+            {
+                let e = centre.entry(*c).or_default();
+                e.0 += vs[v].x;
+                e.1 += 1.0;
+            }
         }
         let mut target = Vec::with_capacity(layer.len());
         let mut weight = Vec::with_capacity(layer.len());
@@ -540,6 +552,13 @@ pub fn layout(g: &Graph, m: &dyn Measure) -> Scene {
                     sum += vs[w].x * k;
                     wsum += k;
                 }
+            }
+            if let Some((total, count)) = innermost[v].and_then(|c| centre.get(&c))
+                && *count > 1.0
+            {
+                let k = 0.6;
+                sum += total / count * k;
+                wsum += k;
             }
             if wsum == 0.0 {
                 target.push(vs[v].x);
@@ -654,8 +673,33 @@ pub fn layout(g: &Graph, m: &dyn Measure) -> Scene {
                         };
                         if right_side {
                             let delta = right + need - l + 0.5;
-                            for &w in &layer[i..] {
-                                vs[w].x += delta;
+                            // 別の囲みの要素なら、その囲みを丸ごと動かす。1 階層だけ動かすと囲みが間延びする
+                            let common = vpaths[v]
+                                .iter()
+                                .zip(&cluster_paths[c])
+                                .take_while(|(a, b)| a == b)
+                                .count();
+                            match vpaths[v].get(common).copied() {
+                                Some(d) => {
+                                    let ms = &members[d];
+                                    let lo_d = ms.iter().map(|w| vs[*w].rank).min().unwrap_or(r);
+                                    let hi_d = ms.iter().map(|w| vs[*w].rank).max().unwrap_or(r);
+                                    for r2 in lo_d..=hi_d {
+                                        let l2 = &layers[r2];
+                                        if let Some(first) =
+                                            l2.iter().position(|w| vpaths[*w].contains(&d))
+                                        {
+                                            for &w in &l2[first..] {
+                                                vs[w].x += delta;
+                                            }
+                                        }
+                                    }
+                                }
+                                None => {
+                                    for &w in &layer[i..] {
+                                        vs[w].x += delta;
+                                    }
+                                }
                             }
                         } else {
                             // 囲みのほうを右へ動かす。囲みが通るすべての階層で、囲みから右をずらす
@@ -1122,6 +1166,43 @@ mod tests {
                         s.groups[j].label,
                         s.groups[j].rect
                     );
+                }
+            }
+        }
+    }
+
+    /// 囲みの面積を、中の要素の面積で割った値。空きが多いほど大きい。
+    fn cluster_sparsity(s: &Scene) -> f32 {
+        let boxes: f32 = s.groups.iter().map(|g| g.rect.w * g.rect.h).sum();
+        let members: f32 = s
+            .nodes
+            .iter()
+            .filter(|n| s.groups.iter().any(|g| g.rect.contains(n.rect.cx(), n.rect.cy())))
+            .map(|n| n.rect.w * n.rect.h)
+            .sum();
+        boxes / members.max(1.0)
+    }
+
+    #[test]
+    fn real_module_diagram_clusters_stay_compact() {
+        for (name, src) in [
+            ("modules", include_str!("testdata_modules.mmd")),
+            ("architecture", include_str!("testdata_architecture.mmd")),
+        ] {
+            let s = scene(src);
+            let sparsity = cluster_sparsity(&s);
+            eprintln!("SPARSITY {name} {sparsity}");
+            assert!(sparsity < 7.0, "{name} の囲みの中が空きすぎている: {sparsity}");
+            for i in 0..s.groups.len() {
+                for j in i + 1..s.groups.len() {
+                    if !s.groups[i].rect.contains(s.groups[j].rect.cx(), s.groups[j].rect.cy()) {
+                        assert!(
+                            !overlaps(&s.groups[i].rect, &s.groups[j].rect),
+                            "{name}: {} / {}",
+                            s.groups[i].label,
+                            s.groups[j].label
+                        );
+                    }
                 }
             }
         }

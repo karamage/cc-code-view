@@ -19,6 +19,8 @@ use std::time::{Duration, Instant};
 
 const PAD: f32 = 20.0;
 const MAX_BASE_SCALE: f32 = 1.2;
+/// 本文の中では図の全体を見せる。小さくなりすぎた図は拡大して読む
+const CARD_MIN_SCALE: f32 = 0.4;
 const APPEAR: Duration = Duration::from_millis(1100);
 
 pub enum DiagramEvent {
@@ -144,8 +146,8 @@ impl DiagramView {
     /// 本文の幅に置いたときの高さ。図の縦横比を保ち、極端に高くしない。
     pub fn natural_height(&self, width: f32) -> f32 {
         let s = &self.scene;
-        let scale = ((width - PAD * 2.0) / s.width.max(1.0)).clamp(0.55, MAX_BASE_SCALE);
-        (s.height * scale + PAD * 2.0).clamp(220.0, 640.0)
+        let scale = ((width - PAD * 2.0) / s.width.max(1.0)).clamp(CARD_MIN_SCALE, MAX_BASE_SCALE);
+        (s.height * scale + PAD * 2.0).clamp(220.0, 760.0)
     }
 
     pub fn reset(&mut self, cx: &mut Context<Self>) {
@@ -238,7 +240,7 @@ fn transform(
     let base = ((vw - PAD * 2.0) / scene.width.max(1.0))
         .min((vh - PAD * 2.0) / scene.height.max(1.0))
         .min(MAX_BASE_SCALE)
-        .max(if expanded { 0.25 } else { 0.55 });
+        .max(if expanded { 0.25 } else { CARD_MIN_SCALE });
     let scale = base * zoom;
     // 収まるときは中央に、はみ出すときは左上をそろえて始まりを見せる
     let place = |view: f32, content: f32| {
@@ -1219,6 +1221,12 @@ impl Render for DiagramView {
                 .child(label)
         };
         let expanded = self.expanded;
+        // 文字が読めないほど小さく見せているときは、拡大の操作を目立たせる
+        let small = !expanded && {
+            let b = self.viewport.get();
+            f32::from(b.size.width) > 1.0
+                && transform(&self.scene, b, 1.0, (0.0, 0.0), false).scale < 0.72
+        };
         div()
             .id("diagram")
             .relative()
@@ -1296,6 +1304,13 @@ impl Render for DiagramView {
                                 window.on_next_frame(move |_, cx| cx.notify(entity));
                             }
                         }
+                        // 画面の外にある図は描かない。長い文書をスクロールしても重くしない
+                        let vp = window.viewport_size();
+                        if f32::from(bounds.origin.y) > f32::from(vp.height)
+                            || f32::from(bounds.origin.y + bounds.size.height) < 0.0
+                        {
+                            return;
+                        }
                         let t = transform(&scene, bounds, zoom, pan, expanded);
                         let frame = Frame {
                             scene: &scene,
@@ -1344,7 +1359,11 @@ impl Render for DiagramView {
                     )
                     .when(!expanded, |d| {
                         d.child(div().w(px(1.)).h(px(14.)).bg(theme::hairline_strong())).child(
-                            control("expand", "拡大")
+                            control("expand", if small { "拡大して読む" } else { "拡大" })
+                                .when(small, |b| {
+                                    b.text_color(theme::teal())
+                                        .bg(theme::alpha(theme::teal(), 0.12))
+                                })
                                 .on_click(cx.listener(|_, _, _, cx| cx.emit(DiagramEvent::Expand))),
                         )
                     }),

@@ -103,16 +103,16 @@ The tour tells you where to start. The **blueprint** tells you how the system is
 |---|---|---|
 | Architecture | Which parts exist, and which way do they depend? | Layered flowchart with subgraphs |
 | Data structures | Which types are central, what do they hold, how do they relate? | Class diagram, ER diagram |
-| Data flow | How does input turn into output? | Left-to-right flowchart, sequence diagram |
+| Data flow | How does input turn into output? | Flowchart of transformations, sequence diagram |
 | Domain | Which concepts, terms and rules does the problem have? | Concept map, state diagram, glossary |
 | Use cases | What can a user do, and what happens inside? | Actors and use cases, sequence diagram |
 | Screens and modules | How are screens and modules split, and how do they connect? | Module map, screen transitions |
 
 - **Mermaid, rendered natively**: diagrams are written in Mermaid (flowchart, sequenceDiagram, classDiagram, erDiagram, stateDiagram-v2). The app parses and lays them out itself and paints them with gpui, so there is no web view.
 - **Diagrams you can touch**: hover a node to light up its connections, with particles flowing in the direction of the data. Nodes marked `↗` open their file; the star of that file lights up on the map. Zoom with `⌘` + scroll, drag to pan, or expand a diagram to fill the window.
-- **Grounded text**: every key point links to the line ranges Claude read. Code names are highlighted.
+- **Grounded text**: key points link to the line ranges Claude says it read; ranges that do not exist in the repository are dropped. Code names are highlighted.
 - **Chapters arrive as they are written**: three chapters are written at a time, and each chapter can be rewritten on its own. Diagrams with broken Mermaid are sent back to Claude with the parser's error before they are saved.
-- **Fits the column**: a long left-to-right flow is turned top-to-bottom when that reads much larger in the document.
+- **Fits the column**: a flowchart is turned between left-to-right and top-to-bottom when that reads much larger in the document. Diagrams too large to read in the column show *Expand to read*.
 
 <p align="center">
   <img src="docs/images/blueprint.png" alt="A blueprint chapter: headline, summary with highlighted code names, and the chapter list on the right" width="880">

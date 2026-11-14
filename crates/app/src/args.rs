@@ -11,8 +11,10 @@ pub enum DemoState {
     Blueprint,
     /// 設計図の図を拡大した状態
     BlueprintFocus,
-    /// 設計図を書いている途中
+    /// 設計図を書いている途中の見た目
     BlueprintRunning,
+    /// 設計図を実際に書く。`CCV_CHAPTERS` で章、`CCV_CANCEL_AFTER` で中断までの秒数を指定する
+    BlueprintRun,
     Tour,
     Code,
     /// コードを開き、ファイル内を検索した状態
@@ -35,6 +37,7 @@ impl DemoState {
             "blueprint" => DemoState::Blueprint,
             "blueprint-focus" => DemoState::BlueprintFocus,
             "blueprint-running" => DemoState::BlueprintRunning,
+            "blueprint-run" => DemoState::BlueprintRun,
             "tour" => DemoState::Tour,
             "code" => DemoState::Code,
             "find" => DemoState::Find,

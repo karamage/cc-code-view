@@ -120,6 +120,8 @@ pub struct Workspace {
     active: Option<usize>,
     /// ファイルを開いていないとき、星図ではなく設計図を出す
     blueprint_open: bool,
+    /// 最後に開いていたのが設計図か。最後のタブを閉じたときの戻り先
+    came_from_blueprint: bool,
     sidebar_open: bool,
     sidebar_width: f32,
     rail_open: bool,
@@ -212,6 +214,7 @@ impl Workspace {
             tabs: Vec::new(),
             active: None,
             blueprint_open: false,
+            came_from_blueprint: false,
             sidebar_open: true,
             sidebar_width: 256.,
             rail_open: true,
@@ -446,6 +449,7 @@ impl Workspace {
         self.remember_line(cx);
         self.active = None;
         self.blueprint_open = false;
+        self.came_from_blueprint = false;
         if let Some(l) = &self.loaded {
             l.tree.update(cx, |t, cx| t.clear_active(cx));
         }
@@ -457,6 +461,7 @@ impl Workspace {
         self.remember_line(cx);
         self.active = None;
         self.blueprint_open = true;
+        self.came_from_blueprint = true;
         self.deep = None;
         if let Some(l) = &self.loaded {
             l.tree.update(cx, |t, cx| t.clear_active(cx));
@@ -578,7 +583,12 @@ impl Workspace {
         if was_active {
             self.active = None;
             if self.tabs.is_empty() {
-                self.show_map(cx);
+                // 設計図からファイルを開いていたなら、設計図へ戻る
+                if self.came_from_blueprint {
+                    self.show_blueprint(cx);
+                } else {
+                    self.show_map(cx);
+                }
             } else {
                 let next = index.min(self.tabs.len() - 1);
                 let t = &self.tabs[next];
@@ -680,8 +690,8 @@ impl Workspace {
     }
 
     fn start_analysis(&mut self, _: &StartAnalysis, _: &mut Window, cx: &mut Context<Self>) {
-        // 既存の解析があるときの Enter で再解析しない。読んでいる間も始めない
-        if self.reading() {
+        // 既存の解析があるときの Enter で再解析しない。読んでいる間と設計図を見ている間も始めない
+        if self.reading() || self.blueprint_open {
             return;
         }
         if self.loaded.as_ref().is_some_and(|l| l.analysis.is_some()) && !self.show_reanalyze {
@@ -1151,6 +1161,9 @@ impl Workspace {
                     cx.spawn_in(window, async move |_, cx| {
                         cx.background_executor().timer(Duration::from_millis(300)).await;
                         let _ = blueprint.update(cx, |b, cx| b.scroll_to(chapter, cx));
+                        // 図を配置すると高さが変わるので、落ち着いてからもう一度送る
+                        cx.background_executor().timer(Duration::from_millis(500)).await;
+                        let _ = blueprint.update(cx, |b, cx| b.scroll_to(chapter, cx));
                         let extra = std::env::var("CCV_SCROLL").ok().and_then(|v| v.parse::<f32>().ok());
                         if let Some(extra) = extra {
                             cx.background_executor().timer(Duration::from_millis(300)).await;
@@ -1181,6 +1194,37 @@ impl Workspace {
                         if done {
                             break;
                         }
+                    }
+                })
+                .detach();
+            }
+            DemoState::BlueprintRun => {
+                let blueprint = l.blueprint.clone();
+                self.show_blueprint(cx);
+                let kinds: Vec<ccv_core::model::ChapterKind> = match std::env::var("CCV_CHAPTERS") {
+                    Ok(list) => ccv_core::model::ChapterKind::ALL
+                        .into_iter()
+                        .filter(|k| list.split(',').any(|s| s.trim() == k.slug()))
+                        .collect(),
+                    Err(_) => vec![ccv_core::model::ChapterKind::UseCases],
+                };
+                // claude の確認が終わってから始める
+                let cancel_after = std::env::var("CCV_CANCEL_AFTER").ok().and_then(|v| v.parse::<u64>().ok());
+                cx.spawn(async move |_, cx| {
+                    for _ in 0..60 {
+                        cx.background_executor().timer(Duration::from_millis(500)).await;
+                        let ready = cx
+                            .update(|cx| cx.global::<AppState>().claude_status == ClaudeStatus::Ready)
+                            .unwrap_or(false);
+                        if ready {
+                            break;
+                        }
+                    }
+                    let _ = blueprint.update(cx, |b, cx| b.generate(&kinds, cx));
+                    if let Some(secs) = cancel_after {
+                        cx.background_executor().timer(Duration::from_secs(secs)).await;
+                        eprintln!("CCV_DEMO cancel");
+                        let _ = blueprint.update(cx, |b, cx| b.cancel_all(cx));
                     }
                 })
                 .detach();

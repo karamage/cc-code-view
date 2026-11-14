@@ -189,16 +189,18 @@ impl BlueprintView {
             .collect()
     }
 
-    /// 画面の上端に来ている章。
+    /// いま読んでいる章。読む位置（画面の上から 3 分の 1）を過ぎた最後の章とする。
     pub fn active_chapter(&self) -> Option<usize> {
-        let top = self.scroll.top_item();
-        // 先頭は表紙。少し読み進めたら最初の章とみなす
-        if top == 0 {
-            let offset = -f32::from(self.scroll.offset().y);
-            let hero = self.scroll.bounds_for_item(0).map_or(0.0, |b| f32::from(b.size.height));
-            return (offset > hero * 0.6).then_some(0);
+        let view = self.scroll.bounds();
+        let line = view.origin.y + view.size.height / 3.0;
+        let mut current = None;
+        for i in 0..self.slots.len() {
+            match self.scroll.bounds_for_item(i + 1) {
+                Some(b) if b.origin.y + self.scroll.offset().y <= line => current = Some(i),
+                _ => break,
+            }
         }
-        Some((top - 1).min(self.slots.len() - 1))
+        current
     }
 
     pub fn scroll_to(&mut self, chapter: usize, cx: &mut Context<Self>) {
@@ -377,8 +379,8 @@ impl BlueprintView {
     /// 図を配置する。描くたびにではなく、章が届いたときに一度だけ行う。
     fn ensure_diagrams(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         // 撮影では演出の途中を写さない
-        let reduce_motion =
-            cx.global::<AppState>().reduce_motion || cx.global::<AppState>().demo.is_some();
+        let reduce_motion = cx.global::<AppState>().reduce_motion
+            || (cx.global::<AppState>().demo.is_some() && std::env::var("CCV_MOTION").is_err());
         let mut measure: Option<GpuiMeasure> = None;
         let width = self.content_width();
         for ci in 0..self.slots.len() {
@@ -407,7 +409,9 @@ impl BlueprintView {
                         }
                         let flow = kind == ChapterKind::DataFlow || d.kind() == Kind::Sequence;
                         // 撮影で、触れている状態を写せるようにする
-                        let demo_hover = std::env::var("CCV_HOVER").ok().filter(|_| cx.global::<AppState>().demo.is_some());
+                        let demo_hover = std::env::var("CCV_HOVER")
+                            .ok()
+                            .filter(|_| cx.global::<AppState>().demo.is_some());
                         let view = cx.new(|_| {
                             let mut v = DiagramView::new(scene, links, flow, reduce_motion);
                             if let Some(id) = &demo_hover {
@@ -810,6 +814,8 @@ impl BlueprintView {
         let hue = chapter_hue(kind);
         let slot = &self.slots[i];
         let ready = slot.chapter.is_some();
+        let available = cx.global::<AppState>().claude_status == ClaudeStatus::Ready;
+        let model = cx.global::<AppState>().settings.last_model;
         let status: gpui::AnyElement = match (&slot.state, &slot.chapter) {
             (SlotState::Running { activity, started }, _) => div()
                 .flex()
@@ -861,7 +867,11 @@ impl BlueprintView {
             (_, None) => div()
                 .text_size(px(11.5))
                 .text_color(theme::alpha(theme::text_muted(), 0.75))
-                .child("まだ描いていません")
+                .child(if available {
+                    format!("押すと {} がこの章だけを描きます", model.label())
+                } else {
+                    "まだ描いていません".to_string()
+                })
                 .into_any_element(),
         };
         let headline = slot.chapter.as_ref().map(|c| c.headline.clone());

@@ -1,0 +1,56 @@
+flowchart TD
+  subgraph SHELL["デスクトップの殻 src-tauri"]
+    TAURI["lib.rs start_server<br>合言葉を作りサーバを起動"]
+  end
+  subgraph CLIENT["画面 src/client"]
+    BOOT(["main.tsx bootstrap"])
+    STATE["state<br>autopilot / watch / sessions"]
+    API["api.ts ApiClient<br>storage.ts"]
+  end
+  subgraph SHARED["共有 src/shared"]
+    TYPES["types.ts / settings.ts"]
+    RISK["risk.ts / risk-score.ts"]
+  end
+  subgraph SERVER["サーバ src/server"]
+    ENTRY(["index.ts / index.tjs.ts"])
+    MAIN["main.ts start / main<br>配線"]
+    RT{{"runtime Runtime<br>Bun / txiki.js"}}
+    APP["app.ts createApp<br>合言葉の検査"]
+    ROUTES["routes<br>review / chat / submit / state"]
+    REVIEWER["reviewer ReviewRunner<br>remote-read"]
+    SNAP["snapshot SnapshotManager"]
+    GH["github GitHubClient"]
+    STORE["store SettingsStore / StateStore"]
+    EXEC["exec.ts CommandRunner"]
+  end
+  subgraph EXT["外部"]
+    CLAUDE[["claude -p"]]
+    GHCLI[["gh CLI と GitHub"]]
+    OS[["open / osascript / login shell"]]
+    FILES[("~/.config/cc-auto-review")]
+    TMP[("TMPDIR のスナップショット")]
+  end
+  TAURI -.->|"子プロセスと stdout"| ENTRY
+  TAURI -.->|"?token= で画面を開く"| BOOT
+  BOOT --> STATE
+  STATE --> API
+  API ==>|"HTTP と SSE"| APP
+  CLIENT --> SHARED
+  SERVER --> SHARED
+  ENTRY --> RT
+  ENTRY --> MAIN
+  MAIN --> APP
+  APP --> ROUTES
+  ROUTES ==> REVIEWER
+  ROUTES --> SNAP
+  ROUTES --> GH
+  ROUTES --> STORE
+  SNAP --> GH
+  REVIEWER --> EXEC
+  GH --> EXEC
+  RT --> EXEC
+  EXEC ==> CLAUDE
+  EXEC --> GHCLI
+  EXEC --> OS
+  STORE --> FILES
+  SNAP --> TMP

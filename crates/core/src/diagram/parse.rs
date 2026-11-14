@@ -31,6 +31,17 @@ fn statements(src: &str) -> Vec<(usize, String)> {
     out
 }
 
+/// 書式の HTML の開きと閉じ。`Vec<Module>` のような型の引数は残す。
+fn is_html_tag(inner: &str) -> bool {
+    const TAGS: [&str; 14] = [
+        "br", "b", "i", "u", "em", "strong", "small", "sub", "sup", "code", "span", "p", "div",
+        "font",
+    ];
+    let inner = inner.trim().trim_matches('/').trim();
+    let name = inner.split_whitespace().next().unwrap_or("").to_ascii_lowercase();
+    TAGS.contains(&name.as_str())
+}
+
 /// ラベルの書式を外す。HTML は解釈せず、改行だけを生かす。
 pub fn clean_label(raw: &str) -> String {
     let mut s = raw.trim().to_string();
@@ -47,13 +58,8 @@ pub fn clean_label(raw: &str) -> String {
         out.push_str(&rest[..at]);
         let tail = &rest[at..];
         match tail.find('>') {
-            Some(close)
-                if close <= 12
-                    && tail[1..close]
-                        .chars()
-                        .all(|c| c.is_ascii_alphanumeric() || c == '/' || c == ' ') =>
-            {
-                let tag = tail[1..close].trim().trim_end_matches('/').trim().to_ascii_lowercase();
+            Some(close) if is_html_tag(&tail[1..close]) => {
+                let tag = tail[1..close].trim().trim_matches('/').trim().to_ascii_lowercase();
                 if tag == "br" {
                     out.push('\n');
                 }
@@ -1488,6 +1494,14 @@ mod tests {
         assert_eq!(clean_label("\"a<br>b <b>c</b>\""), "a\nb c");
         assert_eq!(clean_label("x < y"), "x < y");
         assert_eq!(clean_label("&quot;q&quot;"), "\"q\"");
+        assert_eq!(
+            clean_label("Vec<FileEntry> と Option<String>"),
+            "Vec<FileEntry> と Option<String>"
+        );
+        assert_eq!(clean_label("<span class=x>a</span><br/>b"), "a\nb");
+        let g = graph("flowchart LR\nA -->|\"Vec<FileEntry>\"| B[\"Arc<RepoIndex>\"]");
+        assert_eq!(g.edges[0].label, "Vec<FileEntry>");
+        assert_eq!(g.nodes[1].label, "Arc<RepoIndex>");
     }
 
     #[test]
