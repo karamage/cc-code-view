@@ -406,7 +406,15 @@ impl BlueprintView {
                             }
                         }
                         let flow = kind == ChapterKind::DataFlow || d.kind() == Kind::Sequence;
-                        let view = cx.new(|_| DiagramView::new(scene, links, flow, reduce_motion));
+                        // 撮影で、触れている状態を写せるようにする
+                        let demo_hover = std::env::var("CCV_HOVER").ok().filter(|_| cx.global::<AppState>().demo.is_some());
+                        let view = cx.new(|_| {
+                            let mut v = DiagramView::new(scene, links, flow, reduce_motion);
+                            if let Some(id) = &demo_hover {
+                                v.demo_hover(id);
+                            }
+                            v
+                        });
                         let sub =
                             cx.subscribe(&view, move |this, _, e: &DiagramEvent, cx| match e {
                                 DiagramEvent::Open { path, line } => {

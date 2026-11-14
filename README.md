@@ -96,6 +96,36 @@ Everything runs on your Mac with your installed Claude Code. Without Claude Code
   <sub>A tour stop: the map, the code and the explanation stay in sync.</sub>
 </p>
 
+### 📐 A blueprint with diagrams
+The tour tells you where to start. The **blueprint** tells you how the system is built. Claude writes one chapter per perspective, each with diagrams, key points and the code lines it is based on:
+
+| Chapter | Question it answers | Typical diagrams |
+|---|---|---|
+| Architecture | Which parts exist, and which way do they depend? | Layered flowchart with subgraphs |
+| Data structures | Which types are central, what do they hold, how do they relate? | Class diagram, ER diagram |
+| Data flow | How does input turn into output? | Left-to-right flowchart, sequence diagram |
+| Domain | Which concepts, terms and rules does the problem have? | Concept map, state diagram, glossary |
+| Use cases | What can a user do, and what happens inside? | Actors and use cases, sequence diagram |
+| Screens and modules | How are screens and modules split, and how do they connect? | Module map, screen transitions |
+
+- **Mermaid, rendered natively**: diagrams are written in Mermaid (flowchart, sequenceDiagram, classDiagram, erDiagram, stateDiagram-v2). The app parses and lays them out itself and paints them with gpui, so there is no web view.
+- **Diagrams you can touch**: hover a node to light up its connections, with particles flowing in the direction of the data. Nodes marked `↗` open their file; the star of that file lights up on the map. Zoom with `⌘` + scroll, drag to pan, or expand a diagram to fill the window.
+- **Grounded text**: every key point links to the line ranges Claude read. Code names are highlighted.
+- **Chapters arrive as they are written**: three chapters are written at a time, and each chapter can be rewritten on its own. Diagrams with broken Mermaid are sent back to Claude with the parser's error before they are saved.
+- **Fits the column**: a long left-to-right flow is turned top-to-bottom when that reads much larger in the document.
+
+<p align="center">
+  <img src="docs/images/blueprint.png" alt="A blueprint chapter: headline, summary with highlighted code names, and the chapter list on the right" width="880">
+  <br>
+  <sub>A blueprint chapter, with the chapter list and the map on the right.</sub>
+</p>
+
+<p align="center">
+  <img src="docs/images/blueprint-diagram.png" alt="An expanded data flow diagram with labeled edges carrying the type of each value" width="880">
+  <br>
+  <sub>An expanded diagram. Edge labels carry the type passed between steps.</sub>
+</p>
+
 ### 📖 A code viewer that knows where you are
 - **File tree** that follows the file you are reading. Dots are colored by constellation and tour stops are numbered.
 - **Tabs and breadcrumbs**: tabs reopen where you left off, and the breadcrumb ends with the function you are in.
@@ -146,7 +176,8 @@ Register a repository → See the star chart → Run AI analysis → Take the to
 2. **See the star chart**: it appears in a few seconds, without AI. You can already open any file from the tree or the map.
 3. **Run AI analysis**: on the star chart tab, pick a model and press `Enter`. Claude reads the repository, names the constellations and plans the tour. Progress shows which file Claude is reading.
 4. **Take the tour**: press `T` and move with `←` `→`. `esc` ends the tour.
-5. **Read freely**: the map on the right keeps showing where you are. When the repository changes after an analysis, the title bar says so and you can re-analyze.
+5. **Read the blueprint**: open the *Blueprint* tab (`⌘2`), pick a model and press *Draw the blueprint*. Chapters appear as Claude finishes them.
+6. **Read freely**: the map on the right keeps showing where you are. When the repository changes after an analysis, the title bar says so and you can re-analyze.
 
 ## ⌨️ Keyboard shortcuts
 
@@ -157,11 +188,12 @@ Register a repository → See the star chart → Run AI analysis → Take the to
 | `⌘L` / `⌃G` | Go to line |
 | `⌘⇧E`, `↑` `↓` `←` `→` | Focus the file tree, move and expand/collapse |
 | `⌘W`, `⌃⇥` `⌃⇧⇥` | Close tab, switch tabs |
-| `⌘1` | Go to the star chart tab |
+| `⌘1` / `⌘2` | Go to the star chart tab / the blueprint tab |
 | `⌘B` / `⌘⇧L` | Toggle the file tree / the right panel |
 | `Enter` | Start AI analysis (on the star chart tab) |
 | `T`, `←` `→`, `esc` | Start, move through, and end the tour |
-| `⌘` + scroll, `⌘=` `⌘-` `⌘0` | Zoom the map, reset to the whole sky |
+| `⌘` + scroll, `⌘=` `⌘-` `⌘0` | Zoom the map or a diagram, reset to the whole sky |
+| `esc` | Close an expanded diagram |
 | `⌘` + click | Go to definition |
 | `⌘[` `⌘]` | Back / forward in history |
 | Drag, `⌘C` | Select lines, copy |
@@ -172,13 +204,16 @@ Register a repository → See the star chart → Run AI analysis → Take the to
 ```
 CC Code View.app
 ├── ccv-core   walks the repo, extracts symbols, resolves imports, reads git churn,
-│              groups files, lays out the stars, highlights code, searches, saves state
+│              groups files, lays out the stars, highlights code, searches, saves state,
+│              parses and lays out Mermaid diagrams
 ├── ccv-ai     runs `claude -p` read-only and validates its structured output
 └── app        the gpui UI: home, workspace, file tree, code view, star map, tour
 ```
 
 - The star chart comes only from `ccv-core`: file walking, symbol extraction, import resolution, `git log` churn and a deterministic layout.
 - AI analysis sends Claude a prompt and a JSON schema. The result is validated against the repository, so a constellation or tour stop that points to a file that does not exist is dropped.
+- The blueprint runs one `claude -p` per chapter with its own schema. Each diagram's Mermaid is parsed by the app's own parser; a diagram that does not parse is sent back once with the error, and node links and line references are checked against the repository.
+- Diagrams use a layered layout (cycle removal, ranking, crossing reduction that keeps subgraphs together, quadratic placement, curved edges). Sequence diagrams use their own column and row layout.
 - Each repository's analysis is saved with the commit it was made at, so reopening is instant and the app can tell you when the code has moved on.
 
 ## 🔒 Security
@@ -188,7 +223,7 @@ A cloned repository is treated as untrusted input.
 1. **Read-only Claude**: Claude runs in an empty temporary directory and gets the repository through `--add-dir`. Its only tools are `Read`, `Grep` and `Glob`; it cannot write files or run commands. Reads and writes outside those directories are blocked.
 2. **Repository config is ignored**: with `--restricted` and `--strict-mcp-config`, the repository's `.claude/` hooks and `.mcp.json` are never loaded.
 3. **Secrets are not sent**: files that Claude reads go to Anthropic's API, so `.env`, private keys and credential files are denied (see [`crates/ai/src/command.rs`](crates/ai/src/command.rs)). The check is by file name, so secrets stored under other names are not caught.
-4. **Output is validated and shown as plain text**: entries that point to files not in the repository are dropped, and no Markdown or HTML is rendered.
+4. **Output is validated before it is shown**: entries that point to files not in the repository are dropped. Text is shown as plain text; the only formatting kept is backticks around code names, which are colored. Mermaid is parsed by the app's own subset parser: `click`, links, `style`, `classDef` and `%%{init}%%` are ignored, HTML in labels is stripped except `<br>`, and diagram sizes are capped. Nothing is passed to a browser or a script engine.
 5. **Nothing is written to your repository**: app data lives in `~/Library/Application Support/cc-code-view/`.
 6. **No telemetry**: the app itself makes no network requests and sends no usage data. AI analysis goes through the `claude` command you installed.
 
@@ -240,6 +275,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 scripts/bundle.sh                                # build the .app
 scripts/capture.sh <out-dir> <repo>              # capture every UI state (BIN=target/debug/cc-code-view for a dev build)
 scripts/drive-viewer.sh <out-dir> <repo>         # drive the tree, search and go-to-line with real input
+scripts/drive-blueprint.sh <out> <repo>     # hover and open a diagram node with real input
 scripts/measure.sh [repo]                        # measure performance
 ```
 

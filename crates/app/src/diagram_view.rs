@@ -126,6 +126,12 @@ impl DiagramView {
         }
     }
 
+    /// 撮影用。要素に触れている状態を作る。
+    pub fn demo_hover(&mut self, id: &str) {
+        self.hovered = self.scene.nodes.iter().position(|n| n.id == id && n.mirror_of.is_none());
+        self.pointer_inside = self.hovered.is_some();
+    }
+
     pub fn set_expanded(&mut self, expanded: bool, cx: &mut Context<Self>) {
         self.expanded = expanded;
         self.reset(cx);
